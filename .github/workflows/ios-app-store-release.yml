@@ -18,9 +18,9 @@ jobs:
     env:
       PROJECT_PATH: Timberline Trail App.xcodeproj
       TARGET_NAME: Timberline Trail App
-      ARCHIVE_PATH: ${{ runner.temp }}/TimberlineTrailApp.xcarchive
-      EXPORT_PATH: ${{ runner.temp }}/export
-      EXPORT_OPTIONS_PATH: ${{ runner.temp }}/ExportOptions.plist
+      ARCHIVE_PATH: ${{ github.workspace }}/build/TimberlineTrailApp.xcarchive
+      EXPORT_PATH: ${{ github.workspace }}/build/export
+      EXPORT_OPTIONS_PATH: ${{ github.workspace }}/build/ExportOptions.plist
       ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
       ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
@@ -42,6 +42,7 @@ jobs:
       - name: Create App Store Connect API key file
         run: |
           set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/build"
           KEY_PATH="$RUNNER_TEMP/AuthKey_${ASC_KEY_ID}.p8"
           printf '%s' "$ASC_PRIVATE_KEY" > "$KEY_PATH"
           chmod 600 "$KEY_PATH"
