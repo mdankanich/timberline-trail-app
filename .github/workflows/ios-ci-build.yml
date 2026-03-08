@@ -36,11 +36,11 @@ jobs:
             if [ -n "${GOOGLE_SERVICE_INFO_PLIST_B64:-}" ]; then
               printf '%s' "$GOOGLE_SERVICE_INFO_PLIST_B64" | base64 --decode > "$PLIST_PATH"
             else
-              cat > "$PLIST_PATH" <<'EOF'
-              <?xml version="1.0" encoding="UTF-8"?>
-              <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-              <plist version="1.0"><dict></dict></plist>
-              EOF
+              printf '%s\n' \
+                '<?xml version="1.0" encoding="UTF-8"?>' \
+                '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+                '<plist version="1.0"><dict></dict></plist>' \
+                > "$PLIST_PATH"
             fi
           fi
 
