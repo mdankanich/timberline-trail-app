@@ -58,12 +58,15 @@ perl -0777 -i -pe '
   my $new_build = $ENV{"NEW_BUILD"};
 
   s{
-    (isa = XCBuildConfiguration;.*?PRODUCT_BUNDLE_IDENTIFIER = \Q$bundle_id\E;.*?MARKETING_VERSION = )[^;]+;
-  }{$1$new_marketing;}sgex;
-
-  s{
-    (isa = XCBuildConfiguration;.*?PRODUCT_BUNDLE_IDENTIFIER = \Q$bundle_id\E;.*?CURRENT_PROJECT_VERSION = )[^;]+;
-  }{$1$new_build;}sgex;
+    ([A-F0-9]+ /\* (?:Debug|Release) \*/ = \{\n\t\t\tisa = XCBuildConfiguration;\n\t\t\tbuildSettings = \{\n.*?\n\t\t\t\};\n\t\t\tname = (?:Debug|Release);\n\t\t\};)
+  }{
+    my $block = $1;
+    if ($block =~ /PRODUCT_BUNDLE_IDENTIFIER = \Q$bundle_id\E;/s) {
+      $block =~ s/MARKETING_VERSION = [^;]+;/MARKETING_VERSION = $new_marketing;/;
+      $block =~ s/CURRENT_PROJECT_VERSION = [^;]+;/CURRENT_PROJECT_VERSION = $new_build;/;
+    }
+    $block;
+  }sgex;
 ' "$PBXPROJ"
 
 UPDATED_MARKETING_COUNT="$(rg -n "MARKETING_VERSION = ${NEW_MARKETING_VERSION};" "$PBXPROJ" | wc -l | tr -d ' ')"
