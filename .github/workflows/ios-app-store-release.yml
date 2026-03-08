@@ -52,6 +52,7 @@ jobs:
       - name: Resolve Swift packages
         run: |
           set -euo pipefail
+          rm -f "Timberline Trail App.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
           xcodebuild \
             -project "$PROJECT_PATH" \
             -scheme "$SCHEME_NAME" \
