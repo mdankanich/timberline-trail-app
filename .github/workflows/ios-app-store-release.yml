@@ -18,6 +18,7 @@ jobs:
     env:
       PROJECT_PATH: Timberline Trail App.xcodeproj
       TARGET_NAME: Timberline Trail App
+      SCHEME_NAME: Timberline Trail App
       ARCHIVE_PATH: ${{ github.workspace }}/build/TimberlineTrailApp.xcarchive
       EXPORT_PATH: ${{ github.workspace }}/build/export
       EXPORT_OPTIONS_PATH: ${{ github.workspace }}/build/ExportOptions.plist
@@ -53,7 +54,7 @@ jobs:
           set -euo pipefail
           xcodebuild \
             -project "$PROJECT_PATH" \
-            -target "$TARGET_NAME" \
+            -scheme "$SCHEME_NAME" \
             -resolvePackageDependencies
 
       - name: Archive app (Release, generic iOS device)
@@ -61,7 +62,7 @@ jobs:
           set -euo pipefail
           xcodebuild \
             -project "$PROJECT_PATH" \
-            -target "$TARGET_NAME" \
+            -scheme "$SCHEME_NAME" \
             -configuration Release \
             -destination "generic/platform=iOS" \
             -archivePath "$ARCHIVE_PATH" \
