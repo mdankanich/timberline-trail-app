@@ -26,6 +26,13 @@ In your GitHub repo:
    - `ASC_KEY_ID`: your API Key ID.
    - `ASC_ISSUER_ID`: your API Issuer ID.
    - `ASC_PRIVATE_KEY`: full contents of the `.p8` file (include BEGIN/END lines).
+   - `GOOGLE_SERVICE_INFO_PLIST_B64`: base64 of `Timberline Trail App/GoogleService-Info.plist`.
+
+Generate base64 value locally:
+
+```bash
+base64 -i "Timberline Trail App/GoogleService-Info.plist" | tr -d '\n'
+```
 
 ## 3) Run the workflow
 

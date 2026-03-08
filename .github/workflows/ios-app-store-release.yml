@@ -25,6 +25,7 @@ jobs:
       ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
       ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+      GOOGLE_SERVICE_INFO_PLIST_B64: ${{ secrets.GOOGLE_SERVICE_INFO_PLIST_B64 }}
 
     steps:
       - name: Checkout
@@ -39,6 +40,17 @@ jobs:
           test -n "$ASC_KEY_ID"
           test -n "$ASC_ISSUER_ID"
           test -n "$ASC_PRIVATE_KEY"
+
+      - name: Restore GoogleService-Info.plist
+        run: |
+          set -euo pipefail
+          APP_DIR="$GITHUB_WORKSPACE/Timberline Trail App"
+          PLIST_PATH="$APP_DIR/GoogleService-Info.plist"
+          if [ ! -f "$PLIST_PATH" ]; then
+            test -n "$GOOGLE_SERVICE_INFO_PLIST_B64"
+            mkdir -p "$APP_DIR"
+            printf '%s' "$GOOGLE_SERVICE_INFO_PLIST_B64" | base64 --decode > "$PLIST_PATH"
+          fi
 
       - name: Create App Store Connect API key file
         run: |
