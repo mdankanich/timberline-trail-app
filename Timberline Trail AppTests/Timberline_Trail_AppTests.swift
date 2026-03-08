@@ -6,31 +6,184 @@
 //
 
 import XCTest
+import CoreLocation
 @testable import Timberline_Trail_App
 
 class Timberline_Trail_AppTests: XCTestCase {
 
-    override func setUpWithError() throws {
-        // Put setup code here. This method is called before the invocation of each test method in the class.
+    func testDaysUntilClampsToZero() throws {
+        let now = ISO8601DateFormatter().date(from: "2026-03-05T12:00:00Z")!
+        XCTAssertEqual(daysUntil("2026-03-01", now: now), 0)
+        XCTAssertEqual(daysUntil(nil, now: now), 0)
     }
 
-    override func tearDownWithError() throws {
-        // Put teardown code here. This method is called after the invocation of each test method in the class.
+    func testTripDurationIsInclusive() throws {
+        XCTAssertEqual(tripDurationDays(start: "2026-08-01", end: "2026-08-05"), 5)
+        XCTAssertEqual(tripDurationDays(start: "2026-08-01", end: "2026-08-01"), 1)
     }
 
-    func testExample() throws {
-        // This is an example of a functional test case.
-        // Use XCTAssert and related functions to verify your tests produce the correct results.
-        // Any test you write for XCTest can be annotated as throws and async.
-        // Mark your test throws to produce an unexpected failure when your test encounters an uncaught error.
-        // Mark your test async to allow awaiting for asynchronous code to complete. Check the results with assertions afterwards.
+    func testFormatDateRangeContainsYear() throws {
+        let text = formatDateRange(start: "2026-08-01", end: "2026-08-05")
+        XCTAssertTrue(text.contains("2026"))
     }
 
-    func testPerformanceExample() throws {
-        // This is an example of a performance test case.
-        self.measure {
-            // Put the code you want to measure the time of here.
+    func testPackWeightRules() throws {
+        let items: [PackItem] = [
+            PackItem(id: "tent", name: "Tent", weightOz: 32, consumable: false, isIncluded: true),
+            PackItem(id: "snack", name: "Snacks", weightOz: 12, consumable: true, isIncluded: true),
+            PackItem(id: "stove", name: "Stove", weightOz: 9, consumable: false, isIncluded: false),
+        ]
+
+        let base = calculateBaseWeightOz(items: items)
+        XCTAssertEqual(base, 32, accuracy: 0.001)
+        XCTAssertEqual(estimateFoodAndWaterWeightOz(tripDays: 0), 92, accuracy: 0.001)
+        XCTAssertEqual(estimateFoodAndWaterWeightOz(tripDays: 20), 378, accuracy: 0.001)
+        XCTAssertEqual(calculateTotalPackWeightOz(baseWeightOz: base, tripDays: 3), 168, accuracy: 0.001)
+    }
+
+    func testPackClassThresholds() throws {
+        XCTAssertEqual(packClass(forBaseWeightOz: 9.9 * 16), .ultralight)
+        XCTAssertEqual(packClass(forBaseWeightOz: 10.0 * 16), .lightweight)
+        XCTAssertEqual(packClass(forBaseWeightOz: 20.0 * 16), .traditional)
+        XCTAssertEqual(packClass(forBaseWeightOz: 30.0 * 16), .heavy)
+    }
+
+    func testReadinessWeightsWithAndWithoutElevation() throws {
+        let withElevation = computeReadinessScore(
+            weeklyMiles: 15,
+            longestHikeMiles: 8,
+            elevationGainFeet: 1000,
+            activeWeeksInLastFour: 4
+        )
+        XCTAssertEqual(withElevation.score, 100)
+        XCTAssertEqual(readinessStatus(for: withElevation.score), .great)
+
+        let withoutElevation = computeReadinessScore(
+            weeklyMiles: 7.5,
+            longestHikeMiles: 4,
+            elevationGainFeet: nil,
+            activeWeeksInLastFour: 2
+        )
+        XCTAssertNil(withoutElevation.elevationScore)
+        XCTAssertEqual(withoutElevation.score, 50)
+        XCTAssertEqual(readinessStatus(for: withoutElevation.score), .ok)
+    }
+
+    func testTrailProgressUtilities() throws {
+        let route = [
+            TrailCoordinate(latitude: 45.0000, longitude: -121.0000),
+            TrailCoordinate(latitude: 45.0010, longitude: -121.0000),
+            TrailCoordinate(latitude: 45.0020, longitude: -121.0000),
+            TrailCoordinate(latitude: 45.0030, longitude: -121.0000),
+        ]
+        let user = CLLocationCoordinate2D(latitude: 45.0011, longitude: -121.0000)
+        let nearest = nearestRouteIndex(route: route, userLocation: user, lastIndex: 0, windowRadius: 2)
+        XCTAssertEqual(nearest, 1)
+
+        let remaining = distanceRemainingMiles(route: route, nearestIndex: nearest)
+        XCTAssertGreaterThan(remaining, 0)
+        XCTAssertEqual(etaHours(distanceRemainingMiles: remaining), remaining / 2.0, accuracy: 0.0001)
+
+        let waypoints = [
+            TrailWaypoint(id: "a", name: "Start", distanceFromStart: 0),
+            TrailWaypoint(id: "b", name: "Camp", distanceFromStart: 5),
+            TrailWaypoint(id: "c", name: "Finish", distanceFromStart: 10),
+        ]
+        XCTAssertEqual(nextWaypoint(distanceFromStartMiles: 4.9, waypoints: waypoints)?.id, "b")
+        XCTAssertEqual(nextWaypoint(distanceFromStartMiles: 10.0, waypoints: waypoints)?.id, nil)
+    }
+
+    func testLocalSettingsServiceRoundTrip() throws {
+        let suite = "test.settings.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suite) else {
+            XCTFail("Unable to create test defaults suite")
+            return
+        }
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let service = LocalSettingsService(defaults: defaults)
+        var updated = AppSettings.default
+        updated.mapType = .terrain
+        updated.autoLockEnabled = true
+        updated.autoLockMinutes = .five
+
+        service.saveSettings(updated)
+        let loaded = service.loadSettings()
+        XCTAssertEqual(loaded, updated)
+    }
+
+    func testLocalTripServicePersistsSnapshot() throws {
+        let suite = "test.trips.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suite) else {
+            XCTFail("Unable to create test defaults suite")
+            return
+        }
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let service = LocalTripService(defaults: defaults)
+        let snapshot = TripsSnapshot(
+            trips: [
+                Trip(
+                    id: "trip_1",
+                    name: "Test Trip",
+                    startDate: "2026-08-01",
+                    endDate: "2026-08-02",
+                    partyCount: 1,
+                    createdAt: "2026-03-06T00:00:00Z"
+                )
+            ],
+            activeTripID: "trip_1"
+        )
+
+        service.saveLocalTrips(snapshot)
+        let loaded = service.loadLocalTrips()
+        XCTAssertEqual(loaded, snapshot)
+    }
+
+    func testAppFlowStateDerivation() throws {
+        XCTAssertEqual(deriveAppFlowState(session: nil, profile: nil), .unauthenticated)
+        XCTAssertEqual(
+            deriveAppFlowState(session: AuthSession(email: "hiker@example.com"), profile: nil),
+            .onboardingRequired
+        )
+        XCTAssertEqual(
+            deriveAppFlowState(
+                session: AuthSession(email: "hiker@example.com"),
+                profile: UserProfile(name: "Hiker")
+            ),
+            .ready
+        )
+    }
+
+    func testLocalAuthPasswordResetSuccess() async throws {
+        let suite = "test.auth.reset.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suite) else {
+            XCTFail("Unable to create test defaults suite")
+            return
+        }
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let auth = LocalAuthService(defaults: defaults)
+        _ = try await auth.signUp(email: "reset@example.com", password: "password123")
+        try await auth.requestPasswordReset(email: "reset@example.com")
+    }
+
+    func testLocalAuthPasswordResetUnknownUserFails() async throws {
+        let suite = "test.auth.reset.missing.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suite) else {
+            XCTFail("Unable to create test defaults suite")
+            return
+        }
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let auth = LocalAuthService(defaults: defaults)
+        do {
+            try await auth.requestPasswordReset(email: "missing@example.com")
+            XCTFail("Expected reset to fail for unknown user")
+        } catch let error as AuthServiceError {
+            XCTAssertEqual(error, .userNotFound)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
         }
     }
-
 }
