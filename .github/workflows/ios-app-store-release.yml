@@ -136,6 +136,10 @@ jobs:
           IPA_PATH="$(find "$EXPORT_PATH" -maxdepth 1 -name '*.ipa' | head -n 1)"
           test -n "$IPA_PATH"
 
+          # altool resolves API key files by name from private key directories.
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+          cp "$ASC_KEY_PATH" "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+
           xcrun altool \
             --upload-app \
             --type ios \
