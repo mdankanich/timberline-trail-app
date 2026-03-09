@@ -41,20 +41,24 @@ final class AppStore: ObservableObject {
     @Published private(set) var authInfoMessage: String?
     @Published private(set) var isAuthLoading: Bool
     @Published private(set) var flowState: AppFlowState
+    @Published private(set) var safetyKeyNumbers: [SafetyKeyNumber]
 
     private var backgroundedAt: Date?
     private var currentNonce: String?
+    private let adminEmails: Set<String> = ["michaeldankanich@gmail.com"]
 
     private let authService: AuthService
     private let settingsService: SettingsService
     private let userService: UserService
     private let tripService: TripService
+    private let appContentService: AppContentService
 
     init(environment: AppEnvironment = .live()) {
         self.authService = environment.authService
         self.settingsService = environment.settingsService
         self.userService = environment.userService
         self.tripService = environment.tripService
+        self.appContentService = environment.appContentService
 
         let initialProfile = environment.userService.loadLocalProfile()
         let initialSession = environment.authService.currentSession()
@@ -70,6 +74,7 @@ final class AppStore: ObservableObject {
         self.authInfoMessage = nil
         self.isAuthLoading = false
         self.flowState = deriveAppFlowState(session: initialSession, profile: initialProfile)
+        self.safetyKeyNumbers = SafetyContent.fallback.keyNumbers
 
         if session != nil {
             Task { await refreshFromCloud() }
@@ -78,6 +83,18 @@ final class AppStore: ObservableObject {
 
     var needsOnboarding: Bool {
         flowState == .onboardingRequired
+    }
+
+    var currentRole: UserRole {
+        profile?.role ?? .hiker
+    }
+
+    var isAdmin: Bool {
+        hasRole(.admin)
+    }
+
+    func hasRole(_ role: UserRole) -> Bool {
+        currentRole == role
     }
 
     var activeTrip: Trip? {
@@ -93,6 +110,7 @@ final class AppStore: ObservableObject {
         defer { isAuthLoading = false }
         do {
             session = try await authService.signIn(email: email, password: password)
+            applyRoleBootstrapToLocalProfileIfNeeded()
             refreshFlowState()
             await refreshFromCloud()
         } catch {
@@ -109,6 +127,7 @@ final class AppStore: ObservableObject {
         defer { isAuthLoading = false }
         do {
             session = try await authService.signUp(email: email, password: password)
+            applyRoleBootstrapToLocalProfileIfNeeded()
             refreshFlowState()
             await refreshFromCloud()
         } catch {
@@ -140,13 +159,14 @@ final class AppStore: ObservableObject {
 
             do {
                 session = try await authService.signInWithApple(credential: credential, nonce: currentNonce)
+                applyRoleBootstrapToLocalProfileIfNeeded()
                 refreshFlowState()
 
                 let given = credential.fullName?.givenName ?? ""
                 let family = credential.fullName?.familyName ?? ""
                 let fullName = "\(given) \(family)".trimmingCharacters(in: .whitespacesAndNewlines)
                 if !fullName.isEmpty {
-                    let newProfile = UserProfile(name: fullName)
+                    let newProfile = UserProfile(name: fullName, role: roleForCurrentSession())
                     profile = newProfile
                     userService.saveLocalProfile(newProfile)
                     await userService.pushRemoteProfile(newProfile)
@@ -169,6 +189,7 @@ final class AppStore: ObservableObject {
         authInfoMessage = nil
         userService.clearLocalProfile()
         tripService.clearLocalTrips()
+        safetyKeyNumbers = SafetyContent.fallback.keyNumbers
         refreshFlowState()
     }
 
@@ -199,7 +220,7 @@ final class AppStore: ObservableObject {
     func completeOnboarding(name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        let nextProfile = UserProfile(name: trimmed)
+        let nextProfile = UserProfile(name: trimmed, role: roleForCurrentSession())
         profile = nextProfile
         userService.saveLocalProfile(nextProfile)
         Task { await userService.pushRemoteProfile(nextProfile) }
@@ -209,7 +230,11 @@ final class AppStore: ObservableObject {
     func updateProfile(name: String, photoURI: String? = nil) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        let next = UserProfile(name: trimmed, photoURI: photoURI ?? profile?.photoURI)
+        let next = UserProfile(
+            name: trimmed,
+            photoURI: photoURI ?? profile?.photoURI,
+            role: profile?.role ?? roleForCurrentSession()
+        )
         profile = next
         userService.saveLocalProfile(next)
         Task { await userService.pushRemoteProfile(next) }
@@ -282,19 +307,48 @@ final class AppStore: ObservableObject {
 
     private func refreshFromCloud() async {
         if let remoteProfile = await userService.fetchRemoteProfile() {
-            profile = remoteProfile
-            userService.saveLocalProfile(remoteProfile)
+            let normalized = normalizeRole(remoteProfile)
+            profile = normalized
+            userService.saveLocalProfile(normalized)
+            if normalized != remoteProfile {
+                await userService.pushRemoteProfile(normalized)
+            }
         }
         if let remoteTrips = await tripService.fetchRemoteTrips() {
             trips = remoteTrips.trips
             activeTripID = remoteTrips.activeTripID ?? remoteTrips.trips.first?.id
             tripService.saveLocalTrips(TripsSnapshot(trips: trips, activeTripID: activeTripID))
         }
+        if let safetyContent = await appContentService.fetchSafetyContent(), !safetyContent.keyNumbers.isEmpty {
+            safetyKeyNumbers = safetyContent.keyNumbers
+        }
         refreshFlowState()
     }
 
     private func refreshFlowState() {
         flowState = deriveAppFlowState(session: session, profile: profile)
+    }
+
+    private func roleForCurrentSession() -> UserRole {
+        guard
+            let email = session?.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        else { return .hiker }
+        return adminEmails.contains(email) ? .admin : .hiker
+    }
+
+    private func normalizeRole(_ profile: UserProfile) -> UserProfile {
+        var updated = profile
+        updated.role = roleForCurrentSession()
+        return updated
+    }
+
+    private func applyRoleBootstrapToLocalProfileIfNeeded() {
+        guard let existing = profile else { return }
+        let normalized = normalizeRole(existing)
+        guard normalized != existing else { return }
+        profile = normalized
+        userService.saveLocalProfile(normalized)
+        Task { await userService.pushRemoteProfile(normalized) }
     }
 
     private func formatYMD(_ date: Date) -> String {

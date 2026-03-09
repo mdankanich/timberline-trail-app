@@ -1,0 +1,76 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function currentUserId() {
+      return request.auth.uid;
+    }
+
+    function currentUserEmail() {
+      return request.auth.token.email;
+    }
+
+    function profilePath(uid) {
+      return /databases/$(database)/documents/users/$(uid)/data/profile;
+    }
+
+    function requesterRole() {
+      return exists(profilePath(currentUserId()))
+        ? get(profilePath(currentUserId())).data.role
+        : null;
+    }
+
+    function isBootstrapAdmin() {
+      return signedIn() && currentUserEmail() == "michaeldankanich@gmail.com";
+    }
+
+    function isAdmin() {
+      return signedIn() && (isBootstrapAdmin() || requesterRole() == "ADMIN");
+    }
+
+    function isSelf(uid) {
+      return signedIn() && currentUserId() == uid;
+    }
+
+    function validRole(role) {
+      return role in ["ADMIN", "HIKER"];
+    }
+
+    match /users/{uid}/data/profile {
+      allow read: if isSelf(uid);
+
+      allow create: if isSelf(uid)
+        && validRole(request.resource.data.role)
+        && (
+          (isBootstrapAdmin() && request.resource.data.role == "ADMIN") ||
+          (!isBootstrapAdmin() && request.resource.data.role == "HIKER")
+        );
+
+      allow update: if isSelf(uid)
+        && validRole(request.resource.data.role)
+        && (
+          (isBootstrapAdmin() && request.resource.data.role == "ADMIN") ||
+          (!isBootstrapAdmin() && request.resource.data.role == "HIKER")
+        );
+
+      allow delete: if false;
+    }
+
+    match /users/{uid}/data/trips {
+      allow read, write: if isSelf(uid);
+    }
+
+    match /app_content/{docId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    match /app_content/{docId}/{subCollection}/{subDocId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+  }
+}

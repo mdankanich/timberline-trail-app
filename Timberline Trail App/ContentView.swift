@@ -30,6 +30,32 @@ struct Trip: Identifiable, Codable, Hashable {
 struct UserProfile: Codable, Hashable {
     var name: String
     var photoURI: String? = nil
+    var role: UserRole = .hiker
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case photoURI
+        case role
+    }
+
+    init(name: String, photoURI: String? = nil, role: UserRole = .hiker) {
+        self.name = name
+        self.photoURI = photoURI
+        self.role = role
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        photoURI = try container.decodeIfPresent(String.self, forKey: .photoURI)
+        role = try container.decodeIfPresent(UserRole.self, forKey: .role) ?? .hiker
+    }
+}
+
+enum UserRole: String, Codable, Hashable, CaseIterable, Identifiable {
+    case admin = "ADMIN"
+    case hiker = "HIKER"
+    var id: String { rawValue }
 }
 
 struct AuthSession: Codable, Hashable {
@@ -223,6 +249,26 @@ struct EmergencyContact: Identifiable, Codable, Hashable {
     var phone: String
     var relationship: String
     var isPrimary: Bool
+}
+
+struct SafetyKeyNumber: Identifiable, Codable, Hashable {
+    let id: String
+    var label: String
+    var value: String
+}
+
+struct SafetyContent: Codable, Hashable {
+    var keyNumbers: [SafetyKeyNumber]
+
+    static let fallback = SafetyContent(
+        keyNumbers: [
+            SafetyKeyNumber(id: "forest-ranger", label: "Mt Hood National Forest Ranger", value: "5036681700"),
+            SafetyKeyNumber(id: "hood-river-sheriff", label: "Hood River County Sheriff", value: "5413862098"),
+            SafetyKeyNumber(id: "oregon-state-police", label: "Oregon State Police", value: "5413952424"),
+            SafetyKeyNumber(id: "clackamas-sar", label: "Search & Rescue (Clackamas Co)", value: "5036558211"),
+            SafetyKeyNumber(id: "poison-control", label: "Poison Control", value: "18002221222"),
+        ]
+    )
 }
 
 struct WeatherDay: Identifiable, Codable, Hashable {
@@ -1739,14 +1785,6 @@ private struct SafetyHubView: View {
     @State private var draftPrimary = false
     @Environment(\.openURL) private var openURL
 
-    private let keyNumbers: [(label: String, value: String)] = [
-        ("Mt Hood National Forest Ranger", "5036681700"),
-        ("Hood River County Sheriff", "5413862098"),
-        ("Oregon State Police", "5413952424"),
-        ("Search & Rescue (Clackamas Co)", "5036558211"),
-        ("Poison Control", "18002221222"),
-    ]
-
     var body: some View {
         NavigationView {
             List {
@@ -1807,7 +1845,7 @@ private struct SafetyHubView: View {
                 }
 
                 Section("Key Numbers") {
-                    ForEach(keyNumbers, id: \.value) { number in
+                    ForEach(store.safetyKeyNumbers) { number in
                         HStack {
                             Text(number.label)
                             Spacer()

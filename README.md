@@ -3,6 +3,7 @@
 - [Development to Release Runbook](DEVELOPMENT_TO_RELEASE.md)
 - [CI Release Setup](CI_APP_STORE_RELEASE.md)
 - [Release Checklist](RELEASE_CHECKLIST.md)
+- [Firestore Roles and Content](FIRESTORE_ROLES_AND_CONTENT.md)
 
 ## Version Bump
 

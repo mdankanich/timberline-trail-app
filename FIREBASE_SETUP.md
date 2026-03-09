@@ -14,7 +14,7 @@ Open [Timberline Trail App.xcodeproj](/Users/michaeldankanich/Documents/git/app-
 
 ## 2) Add `GoogleService-Info.plist`
 1. In Firebase console, create/select iOS app with bundle ID:
-   - `com.trail.timberline.Timberline-Trail-App`
+   - `com.michaeldankanich.timberlinetrailapp.ios2026`
 2. Download `GoogleService-Info.plist`.
 3. Add it to `Timberline Trail App/` target in Xcode.
 
@@ -46,3 +46,7 @@ xcodebuild -project 'Timberline Trail App.xcodeproj' -scheme 'Timberline Trail A
 - When `FirebaseFirestore` is also linked, profile/trips sync to Firestore under:
   - `users/{uid}/data/profile`
   - `users/{uid}/data/trips`
+
+## Roles and content management
+- Role model docs: [FIRESTORE_ROLES_AND_CONTENT.md](/Users/michaeldankanich/Documents/git/app-timberline-trail/Timberline%20Trail%20App/FIRESTORE_ROLES_AND_CONTENT.md)
+- Firestore rules file: [firestore.rules](/Users/michaeldankanich/Documents/git/app-timberline-trail/Timberline%20Trail%20App/firestore.rules)

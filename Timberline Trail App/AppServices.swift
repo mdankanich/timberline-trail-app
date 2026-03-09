@@ -91,6 +91,10 @@ protocol TripService {
     func pushRemoteTrips(_ snapshot: TripsSnapshot) async
 }
 
+protocol AppContentService {
+    func fetchSafetyContent() async -> SafetyContent?
+}
+
 enum PersistenceCodec {
     static func persist<T: Encodable>(_ value: T?, key: String, defaults: UserDefaults) {
         if value == nil {
@@ -423,6 +427,26 @@ final class FirebaseTripCloudService: TripService {
         }
     }
 }
+
+final class FirebaseAppContentService: AppContentService {
+    func fetchSafetyContent() async -> SafetyContent? {
+        return await withCheckedContinuation { continuation in
+            Firestore.firestore()
+                .collection("app_content")
+                .document("safety")
+                .getDocument { snap, _ in
+                    guard
+                        let data = snap?.data(),
+                        let content: SafetyContent = FirestoreCodec.decode(data)
+                    else {
+                        continuation.resume(returning: nil)
+                        return
+                    }
+                    continuation.resume(returning: content)
+                }
+        }
+    }
+}
 #endif
 
 final class CompositeUserService: UserService {
@@ -457,11 +481,16 @@ final class CompositeTripService: TripService {
     func pushRemoteTrips(_ snapshot: TripsSnapshot) async { await remote?.pushRemoteTrips(snapshot) }
 }
 
+final class LocalAppContentService: AppContentService {
+    func fetchSafetyContent() async -> SafetyContent? { nil }
+}
+
 struct AppEnvironment {
     let authService: AuthService
     let settingsService: SettingsService
     let userService: UserService
     let tripService: TripService
+    let appContentService: AppContentService
 }
 
 extension AppEnvironment {
@@ -479,16 +508,19 @@ extension AppEnvironment {
 #if canImport(FirebaseAuth) && canImport(FirebaseFirestore)
         let user: UserService = CompositeUserService(local: localUser, remote: FirebaseUserCloudService())
         let trip: TripService = CompositeTripService(local: localTrip, remote: FirebaseTripCloudService())
+        let appContent: AppContentService = FirebaseAppContentService()
 #else
         let user: UserService = CompositeUserService(local: localUser, remote: nil)
         let trip: TripService = CompositeTripService(local: localTrip, remote: nil)
+        let appContent: AppContentService = LocalAppContentService()
 #endif
 
         return AppEnvironment(
             authService: auth,
             settingsService: localSettings,
             userService: user,
-            tripService: trip
+            tripService: trip,
+            appContentService: appContent
         )
     }
 }
