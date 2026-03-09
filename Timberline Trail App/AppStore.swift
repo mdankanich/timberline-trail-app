@@ -38,6 +38,7 @@ final class AppStore: ObservableObject {
     @Published private(set) var authInfoMessage: String?
     @Published private(set) var isAuthLoading: Bool
     @Published private(set) var flowState: AppFlowState
+    @Published private(set) var safetyKeyNumbers: [SafetyKeyNumber]
 
     private var backgroundedAt: Date?
     private var currentNonce: String?
@@ -46,17 +47,20 @@ final class AppStore: ObservableObject {
     private let settingsService: SettingsService
     private let userService: UserService
     private let tripService: TripService
+    private let appContentService: AppContentService
 
     init(environment: AppEnvironment = .live()) {
         self.authService = environment.authService
         self.settingsService = environment.settingsService
         self.userService = environment.userService
         self.tripService = environment.tripService
+        self.appContentService = environment.appContentService
 
         let initialProfile = environment.userService.loadLocalProfile()
         let initialSession = environment.authService.currentSession()
         self.settings = environment.settingsService.loadSettings()
         self.profile = initialProfile
+        self.safetyKeyNumbers = SafetyContent.fallback.keyNumbers
 
         let tripSnapshot = environment.tripService.loadLocalTrips()
         self.trips = tripSnapshot.trips
@@ -160,6 +164,7 @@ final class AppStore: ObservableObject {
         authService.signOut()
         session = nil
         profile = nil
+        safetyKeyNumbers = SafetyContent.fallback.keyNumbers
         trips = []
         activeTripID = nil
         backgroundedAt = nil
@@ -286,6 +291,11 @@ final class AppStore: ObservableObject {
             trips = remoteTrips.trips
             activeTripID = remoteTrips.activeTripID ?? remoteTrips.trips.first?.id
             tripService.saveLocalTrips(TripsSnapshot(trips: trips, activeTripID: activeTripID))
+        }
+        if let safetyContent = await appContentService.fetchSafetyContent() {
+            safetyKeyNumbers = safetyContent.keyNumbers
+        } else {
+            safetyKeyNumbers = SafetyContent.fallback.keyNumbers
         }
         refreshFlowState()
     }

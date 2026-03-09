@@ -225,6 +225,26 @@ struct EmergencyContact: Identifiable, Codable, Hashable {
     var isPrimary: Bool
 }
 
+struct SafetyKeyNumber: Identifiable, Codable, Hashable {
+    let id: String
+    let label: String
+    let value: String
+}
+
+struct SafetyContent: Codable, Hashable {
+    let keyNumbers: [SafetyKeyNumber]
+
+    static let fallback = SafetyContent(
+        keyNumbers: [
+            SafetyKeyNumber(id: "mt-hood-ranger", label: "Mt Hood National Forest Ranger", value: "5036681700"),
+            SafetyKeyNumber(id: "hood-river-sheriff", label: "Hood River County Sheriff", value: "5413862098"),
+            SafetyKeyNumber(id: "oregon-state-police", label: "Oregon State Police", value: "5413952424"),
+            SafetyKeyNumber(id: "clackamas-sar", label: "Search & Rescue (Clackamas Co)", value: "5036558211"),
+            SafetyKeyNumber(id: "poison-control", label: "Poison Control", value: "18002221222")
+        ]
+    )
+}
+
 struct WeatherDay: Identifiable, Codable, Hashable {
     let id: String
     let date: String
@@ -1739,14 +1759,6 @@ private struct SafetyHubView: View {
     @State private var draftPrimary = false
     @Environment(\.openURL) private var openURL
 
-    private let keyNumbers: [(label: String, value: String)] = [
-        ("Mt Hood National Forest Ranger", "5036681700"),
-        ("Hood River County Sheriff", "5413862098"),
-        ("Oregon State Police", "5413952424"),
-        ("Search & Rescue (Clackamas Co)", "5036558211"),
-        ("Poison Control", "18002221222"),
-    ]
-
     var body: some View {
         NavigationView {
             List {
@@ -1807,7 +1819,7 @@ private struct SafetyHubView: View {
                 }
 
                 Section("Key Numbers") {
-                    ForEach(keyNumbers, id: \.value) { number in
+                    ForEach(store.safetyKeyNumbers) { number in
                         HStack {
                             Text(number.label)
                             Spacer()

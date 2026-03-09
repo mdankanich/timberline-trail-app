@@ -91,6 +91,10 @@ protocol TripService {
     func pushRemoteTrips(_ snapshot: TripsSnapshot) async
 }
 
+protocol AppContentService {
+    func fetchSafetyContent() async -> SafetyContent?
+}
+
 enum PersistenceCodec {
     static func persist<T: Encodable>(_ value: T?, key: String, defaults: UserDefaults) {
         if value == nil {
@@ -312,6 +316,10 @@ final class LocalTripService: TripService {
     func pushRemoteTrips(_ snapshot: TripsSnapshot) async {}
 }
 
+final class LocalAppContentService: AppContentService {
+    func fetchSafetyContent() async -> SafetyContent? { nil }
+}
+
 #if canImport(FirebaseAuth) && canImport(FirebaseFirestore)
 enum FirestoreCodec {
     static func encode<T: Encodable>(_ value: T) -> [String: Any]? {
@@ -423,6 +431,37 @@ final class FirebaseTripCloudService: TripService {
         }
     }
 }
+
+final class FirebaseAppContentService: AppContentService {
+    func fetchSafetyContent() async -> SafetyContent? {
+        await withCheckedContinuation { continuation in
+            Firestore.firestore()
+                .collection("app_content")
+                .document("safety")
+                .getDocument { snap, _ in
+                    guard
+                        let data = snap?.data(),
+                        let rows = data["keyNumbers"] as? [[String: Any]]
+                    else {
+                        continuation.resume(returning: nil)
+                        return
+                    }
+
+                    let numbers: [SafetyKeyNumber] = rows.compactMap { row in
+                        guard
+                            let label = row["label"] as? String,
+                            let value = row["value"] as? String
+                        else { return nil }
+                        let id = (row["id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let resolvedID = (id?.isEmpty == false) ? id! : UUID().uuidString
+                        return SafetyKeyNumber(id: resolvedID, label: label, value: value)
+                    }
+
+                    continuation.resume(returning: numbers.isEmpty ? nil : SafetyContent(keyNumbers: numbers))
+                }
+        }
+    }
+}
 #endif
 
 final class CompositeUserService: UserService {
@@ -462,6 +501,7 @@ struct AppEnvironment {
     let settingsService: SettingsService
     let userService: UserService
     let tripService: TripService
+    let appContentService: AppContentService
 }
 
 extension AppEnvironment {
@@ -479,16 +519,19 @@ extension AppEnvironment {
 #if canImport(FirebaseAuth) && canImport(FirebaseFirestore)
         let user: UserService = CompositeUserService(local: localUser, remote: FirebaseUserCloudService())
         let trip: TripService = CompositeTripService(local: localTrip, remote: FirebaseTripCloudService())
+        let content: AppContentService = FirebaseAppContentService()
 #else
         let user: UserService = CompositeUserService(local: localUser, remote: nil)
         let trip: TripService = CompositeTripService(local: localTrip, remote: nil)
+        let content: AppContentService = LocalAppContentService()
 #endif
 
         return AppEnvironment(
             authService: auth,
             settingsService: localSettings,
             userService: user,
-            tripService: trip
+            tripService: trip,
+            appContentService: content
         )
     }
 }
