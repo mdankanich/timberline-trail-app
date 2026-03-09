@@ -23,7 +23,10 @@ enum AppFlowState: Equatable {
 
 func deriveAppFlowState(session: AuthSession?, profile: UserProfile?) -> AppFlowState {
     guard session != nil else { return .unauthenticated }
-    guard profile != nil else { return .onboardingRequired }
+    guard
+        let profile,
+        !profile.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else { return .onboardingRequired }
     return .ready
 }
 
