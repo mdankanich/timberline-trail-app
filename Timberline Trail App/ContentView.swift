@@ -769,9 +769,15 @@ final class HealthTrainingStore: ObservableObject {
     @Published private(set) var activeWeeks: Int = 0
 
     private let store = HKHealthStore()
+    private var observerQueries: [HKObserverQuery] = []
+    private var isObservingUpdates = false
 
     init() {
         self.isAvailable = HKHealthStore.isHealthDataAvailable()
+        guard isAvailable else { return }
+        Task {
+            await bootstrapAuthorizationState()
+        }
     }
 
     func connectAndSync() async {
@@ -779,31 +785,53 @@ final class HealthTrainingStore: ObservableObject {
             errorMessage = "Apple Health is only available on iPhone."
             return
         }
-        isLoading = true
-        defer { isLoading = false }
-
-        do {
-            try await requestAuthorization()
-            isAuthorized = true
-            await sync()
-        } catch {
-            errorMessage = "Unable to connect Apple Health."
-        }
+        guard !isLoading else { return }
+        await performSync(requestAuthorizationIfNeeded: true)
     }
 
     func sync() async {
         guard isAvailable else { return }
+        guard !isLoading else { return }
+        await performSync(requestAuthorizationIfNeeded: false)
+    }
+
+    private func bootstrapAuthorizationState() async {
+        do {
+            let status = try await authorizationRequestStatus()
+            if status == .unnecessary {
+                isAuthorized = true
+                startObservingHealthUpdates()
+                await sync()
+            }
+        } catch {
+            // Keep the connect CTA visible when status cannot be resolved.
+        }
+    }
+
+    private func performSync(requestAuthorizationIfNeeded: Bool) async {
         isLoading = true
         defer { isLoading = false }
         errorMessage = nil
 
         do {
+            if requestAuthorizationIfNeeded || !isAuthorized {
+                try await requestAuthorization()
+                isAuthorized = true
+                startObservingHealthUpdates()
+            }
+
             let workouts = try await loadRecentWorkouts(days: 28)
             let flights = try await loadRecentFlightsClimbed(days: 28)
             applyMetrics(workouts: workouts, flights: flights)
             lastSynced = Date()
+            isAuthorized = true
         } catch {
-            errorMessage = "Failed to sync Apple Health data."
+            let detail = (error as NSError).localizedDescription
+            if requestAuthorizationIfNeeded {
+                errorMessage = "Unable to connect Apple Health (\(detail))."
+            } else {
+                errorMessage = "Failed to sync Apple Health data (\(detail))."
+            }
         }
     }
 
@@ -859,6 +887,47 @@ final class HealthTrainingStore: ObservableObject {
                 }
             }
         }
+    }
+
+    private func authorizationRequestStatus() async throws -> HKAuthorizationRequestStatus {
+        let workoutType = HKObjectType.workoutType()
+        guard let flightsType = HKObjectType.quantityType(forIdentifier: .flightsClimbed) else {
+            throw NSError(domain: "Health", code: 1)
+        }
+
+        let readTypes: Set<HKObjectType> = [workoutType, flightsType]
+        return try await withCheckedThrowingContinuation { continuation in
+            store.getRequestStatusForAuthorization(toShare: [], read: readTypes) { status, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: status)
+                }
+            }
+        }
+    }
+
+    private func startObservingHealthUpdates() {
+        guard !isObservingUpdates else { return }
+        guard let flightsType = HKObjectType.quantityType(forIdentifier: .flightsClimbed) else { return }
+
+        let types: [HKSampleType] = [HKObjectType.workoutType(), flightsType]
+        observerQueries.removeAll()
+
+        for type in types {
+            store.enableBackgroundDelivery(for: type, frequency: .immediate) { _, _ in }
+            let query = HKObserverQuery(sampleType: type, predicate: nil) { [weak self] _, completionHandler, _ in
+                Task { @MainActor [weak self] in
+                    defer { completionHandler() }
+                    guard let self else { return }
+                    await self.sync()
+                }
+            }
+            observerQueries.append(query)
+            store.execute(query)
+        }
+
+        isObservingUpdates = true
     }
 
     private func loadRecentWorkouts(days: Int) async throws -> [HKWorkout] {
@@ -1930,6 +1999,7 @@ private struct TrainingReadinessView: View {
                             }
                         }
                         .buttonStyle(.borderedProminent)
+                        .disabled(healthStore.isLoading)
                         if let error = healthStore.errorMessage {
                             Text(error)
                                 .font(.footnote)
@@ -1988,10 +2058,17 @@ private struct TrainingReadinessView: View {
                             Text("Apple Health synced \(relativeSyncText(lastSynced))")
                                 .foregroundColor(.secondary)
                         }
-                        Button("Refresh") {
+                        Button {
                             Task { await healthStore.sync() }
+                        } label: {
+                            if healthStore.isLoading {
+                                ProgressView()
+                            } else {
+                                Text("Refresh")
+                            }
                         }
                         .buttonStyle(.bordered)
+                        .disabled(healthStore.isLoading)
                         if let error = healthStore.errorMessage {
                             Text(error)
                                 .font(.footnote)
