@@ -763,7 +763,9 @@ final class HealthTrainingStore: ObservableObject {
     @Published private(set) var lastSynced: Date?
     @Published private(set) var readiness: ReadinessBreakdown?
     @Published private(set) var weeklyMilesHistory: [Double] = [0, 0, 0, 0] // oldest -> newest
+    @Published private(set) var weeklyWorkoutsHistory: [Int] = [0, 0, 0, 0] // oldest -> newest
     @Published private(set) var averageWeeklyMiles: Double = 0
+    @Published private(set) var averageWeeklyWorkouts: Double = 0
     @Published private(set) var longestHikeMiles: Double = 0
     @Published private(set) var monthlyElevationFeet: Double?
     @Published private(set) var activeWeeks: Int = 0
@@ -839,17 +841,22 @@ final class HealthTrainingStore: ObservableObject {
         let now = Date()
         let msPerWeek: TimeInterval = 7 * 24 * 60 * 60
         var milesPerWeek: [Double] = [0, 0, 0, 0]
+        var workoutsPerWeek: [Int] = [0, 0, 0, 0]
 
         for workout in workouts {
             let age = now.timeIntervalSince(workout.startDate)
             let weekIndex = 3 - min(3, max(0, Int(age / msPerWeek)))
+            workoutsPerWeek[weekIndex] += 1
             let miles = (workout.totalDistance?.doubleValue(for: .mile()) ?? 0)
             milesPerWeek[weekIndex] += miles
         }
 
         let longest = workouts.reduce(0.0) { max($0, $1.totalDistance?.doubleValue(for: .mile()) ?? 0) }
         let avgMiles = milesPerWeek.reduce(0, +) / 4.0
-        let weeksWithActivity = milesPerWeek.filter { $0 > 0.01 }.count
+        let avgWorkouts = Double(workoutsPerWeek.reduce(0, +)) / 4.0
+        let weeksWithActivity = zip(milesPerWeek, workoutsPerWeek).filter { miles, sessions in
+            miles > 0.01 || sessions > 0
+        }.count
 
         let flightsTotal = flights.reduce(0.0) { partial, sample in
             partial + sample.quantity.doubleValue(for: HKUnit.count())
@@ -857,7 +864,9 @@ final class HealthTrainingStore: ObservableObject {
         let elevationFeet = flights.isEmpty ? nil : flightsTotal * 10.0
 
         weeklyMilesHistory = milesPerWeek
+        weeklyWorkoutsHistory = workoutsPerWeek
         averageWeeklyMiles = avgMiles
+        averageWeeklyWorkouts = avgWorkouts
         longestHikeMiles = longest
         monthlyElevationFeet = elevationFeet
         activeWeeks = weeksWithActivity
@@ -2022,6 +2031,7 @@ private struct TrainingReadinessView: View {
                                 Spacer()
                             }
                             StatRow(label: "Weekly Miles", value: "\(String(format: "%.1f", healthStore.averageWeeklyMiles)) mi")
+                            StatRow(label: "Weekly Sessions", value: "\(String(format: "%.1f", healthStore.averageWeeklyWorkouts))")
                             StatRow(label: "Longest Hike", value: "\(String(format: "%.1f", healthStore.longestHikeMiles)) mi")
                             StatRow(label: "Elevation Gain", value: healthStore.monthlyElevationFeet.map { "\(Int($0.rounded())) ft" } ?? "No data")
                             StatRow(label: "Consistency", value: "\(healthStore.activeWeeks)/4 wks")
