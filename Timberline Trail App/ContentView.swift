@@ -856,7 +856,12 @@ final class HealthTrainingStore: ObservableObject {
         var workoutsPerWeek: [Int] = [0, 0, 0, 0]
         var walkingMilesPerWeek: [Double] = [0, 0, 0, 0]
         var stepsPerWeek: [Double] = [0, 0, 0, 0]
-        var activityDaysPerWeek: [Set<String>] = [[], [], [], []]
+        var activityDaysPerWeek: [Set<String>] = [
+            Set<String>(),
+            Set<String>(),
+            Set<String>(),
+            Set<String>(),
+        ]
         var walkingMilesByDay: [String: Double] = [:]
         var stepsByDay: [String: Double] = [:]
 
@@ -902,8 +907,9 @@ final class HealthTrainingStore: ObservableObject {
         let longestStepsDayApproxMiles = (stepsByDay.values.max() ?? 0) / 2000.0
         let longest = max(longestWorkout, longestWalkingDay, longestStepsDayApproxMiles)
         let avgMiles = milesPerWeek.reduce(0, +) / 4.0
-        let sessionsPerWeek = zip(workoutsPerWeek, activityDaysPerWeek).map { workouts, activeDays in
-            max(workouts, activeDays.count)
+        var sessionsPerWeek: [Int] = [0, 0, 0, 0]
+        for i in 0..<4 {
+            sessionsPerWeek[i] = max(workoutsPerWeek[i], activityDaysPerWeek[i].count)
         }
         let avgWorkouts = Double(sessionsPerWeek.reduce(0, +)) / 4.0
         let weeksWithActivity = activityDaysPerWeek.filter { !$0.isEmpty }.count
