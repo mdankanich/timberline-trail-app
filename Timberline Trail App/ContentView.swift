@@ -771,7 +771,6 @@ final class HealthTrainingStore: ObservableObject {
     private let store = HKHealthStore()
     private var observerQueries: [HKObserverQuery] = []
     private var isObservingUpdates = false
-    private let syncTimeoutNanos: UInt64 = 20_000_000_000
 
     init() {
         self.isAvailable = HKHealthStore.isHealthDataAvailable()
@@ -816,19 +815,13 @@ final class HealthTrainingStore: ObservableObject {
 
         do {
             if requestAuthorizationIfNeeded || !isAuthorized {
-                try await withTimeout(syncTimeoutNanos) {
-                    try await requestAuthorization()
-                }
+                try await requestAuthorization()
                 isAuthorized = true
                 startObservingHealthUpdates()
             }
 
-            let workouts = try await withTimeout(syncTimeoutNanos) {
-                try await loadRecentWorkouts(days: 28)
-            }
-            let flights = try await withTimeout(syncTimeoutNanos) {
-                try await loadRecentFlightsClimbed(days: 28)
-            }
+            let workouts = try await loadRecentWorkouts(days: 28)
+            let flights = try await loadRecentFlightsClimbed(days: 28)
             applyMetrics(workouts: workouts, flights: flights)
             lastSynced = Date()
             isAuthorized = true
@@ -935,29 +928,6 @@ final class HealthTrainingStore: ObservableObject {
         }
 
         isObservingUpdates = true
-    }
-
-    private func withTimeout<T>(_ timeoutNanos: UInt64, operation: @escaping () async throws -> T) async throws -> T {
-        try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask {
-                try await operation()
-            }
-            group.addTask {
-                try await Task.sleep(nanoseconds: timeoutNanos)
-                throw NSError(
-                    domain: "Health",
-                    code: 408,
-                    userInfo: [NSLocalizedDescriptionKey: "The HealthKit request timed out."]
-                )
-            }
-
-            let first = try await group.next()
-            group.cancelAll()
-            guard let first else {
-                throw NSError(domain: "Health", code: 500)
-            }
-            return first
-        }
     }
 
     private func loadRecentWorkouts(days: Int) async throws -> [HKWorkout] {
