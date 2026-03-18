@@ -824,7 +824,14 @@ final class HealthTrainingStore: ObservableObject {
 
             let workouts = try await loadRecentWorkouts(days: 28)
             let flights = try await loadRecentFlightsClimbed(days: 28)
-            applyMetrics(workouts: workouts, flights: flights)
+            let walkingDistanceSamples = try await loadRecentWalkingRunningDistance(days: 28)
+            let stepSamples = try await loadRecentSteps(days: 28)
+            applyMetrics(
+                workouts: workouts,
+                flights: flights,
+                walkingDistanceSamples: walkingDistanceSamples,
+                stepSamples: stepSamples
+            )
             lastSynced = Date()
             isAuthorized = true
         } catch {
@@ -837,11 +844,21 @@ final class HealthTrainingStore: ObservableObject {
         }
     }
 
-    private func applyMetrics(workouts: [HKWorkout], flights: [HKQuantitySample]) {
+    private func applyMetrics(
+        workouts: [HKWorkout],
+        flights: [HKQuantitySample],
+        walkingDistanceSamples: [HKQuantitySample],
+        stepSamples: [HKQuantitySample]
+    ) {
         let now = Date()
         let msPerWeek: TimeInterval = 7 * 24 * 60 * 60
         var milesPerWeek: [Double] = [0, 0, 0, 0]
         var workoutsPerWeek: [Int] = [0, 0, 0, 0]
+        var walkingMilesPerWeek: [Double] = [0, 0, 0, 0]
+        var stepsPerWeek: [Double] = [0, 0, 0, 0]
+        var activityDaysPerWeek: [Set<String>] = [[], [], [], []]
+        var walkingMilesByDay: [String: Double] = [:]
+        var stepsByDay: [String: Double] = [:]
 
         for workout in workouts {
             let age = now.timeIntervalSince(workout.startDate)
@@ -849,14 +866,47 @@ final class HealthTrainingStore: ObservableObject {
             workoutsPerWeek[weekIndex] += 1
             let miles = (workout.totalDistance?.doubleValue(for: .mile()) ?? 0)
             milesPerWeek[weekIndex] += miles
+            activityDaysPerWeek[weekIndex].insert(dayKey(for: workout.startDate))
         }
 
-        let longest = workouts.reduce(0.0) { max($0, $1.totalDistance?.doubleValue(for: .mile()) ?? 0) }
+        for sample in walkingDistanceSamples {
+            let age = now.timeIntervalSince(sample.startDate)
+            let weekIndex = 3 - min(3, max(0, Int(age / msPerWeek)))
+            let miles = sample.quantity.doubleValue(for: .mile())
+            walkingMilesPerWeek[weekIndex] += miles
+            let key = dayKey(for: sample.startDate)
+            walkingMilesByDay[key, default: 0] += miles
+            activityDaysPerWeek[weekIndex].insert(key)
+        }
+
+        for sample in stepSamples {
+            let age = now.timeIntervalSince(sample.startDate)
+            let weekIndex = 3 - min(3, max(0, Int(age / msPerWeek)))
+            let steps = sample.quantity.doubleValue(for: .count())
+            stepsPerWeek[weekIndex] += steps
+            let key = dayKey(for: sample.startDate)
+            stepsByDay[key, default: 0] += steps
+            activityDaysPerWeek[weekIndex].insert(key)
+        }
+
+        for i in 0..<4 {
+            milesPerWeek[i] += walkingMilesPerWeek[i]
+            // Fallback for devices/users where Health has steps but no walking-distance samples.
+            if walkingMilesPerWeek[i] < 0.01 && milesPerWeek[i] < 0.01 && stepsPerWeek[i] > 0 {
+                milesPerWeek[i] += stepsPerWeek[i] / 2000.0
+            }
+        }
+
+        let longestWorkout = workouts.reduce(0.0) { max($0, $1.totalDistance?.doubleValue(for: .mile()) ?? 0) }
+        let longestWalkingDay = walkingMilesByDay.values.max() ?? 0
+        let longestStepsDayApproxMiles = (stepsByDay.values.max() ?? 0) / 2000.0
+        let longest = max(longestWorkout, longestWalkingDay, longestStepsDayApproxMiles)
         let avgMiles = milesPerWeek.reduce(0, +) / 4.0
-        let avgWorkouts = Double(workoutsPerWeek.reduce(0, +)) / 4.0
-        let weeksWithActivity = zip(milesPerWeek, workoutsPerWeek).filter { miles, sessions in
-            miles > 0.01 || sessions > 0
-        }.count
+        let sessionsPerWeek = zip(workoutsPerWeek, activityDaysPerWeek).map { workouts, activeDays in
+            max(workouts, activeDays.count)
+        }
+        let avgWorkouts = Double(sessionsPerWeek.reduce(0, +)) / 4.0
+        let weeksWithActivity = activityDaysPerWeek.filter { !$0.isEmpty }.count
 
         let flightsTotal = flights.reduce(0.0) { partial, sample in
             partial + sample.quantity.doubleValue(for: HKUnit.count())
@@ -864,7 +914,7 @@ final class HealthTrainingStore: ObservableObject {
         let elevationFeet = flights.isEmpty ? nil : flightsTotal * 10.0
 
         weeklyMilesHistory = milesPerWeek
-        weeklyWorkoutsHistory = workoutsPerWeek
+        weeklyWorkoutsHistory = sessionsPerWeek
         averageWeeklyMiles = avgMiles
         averageWeeklyWorkouts = avgWorkouts
         longestHikeMiles = longest
@@ -879,12 +929,7 @@ final class HealthTrainingStore: ObservableObject {
     }
 
     private func requestAuthorization() async throws {
-        let workoutType = HKObjectType.workoutType()
-        guard let flightsType = HKObjectType.quantityType(forIdentifier: .flightsClimbed) else {
-            throw NSError(domain: "Health", code: 1)
-        }
-
-        let readTypes: Set<HKObjectType> = [workoutType, flightsType]
+        let readTypes = buildReadTypes()
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             store.requestAuthorization(toShare: [], read: readTypes) { success, error in
                 if let error = error {
@@ -899,12 +944,7 @@ final class HealthTrainingStore: ObservableObject {
     }
 
     private func authorizationRequestStatus() async throws -> HKAuthorizationRequestStatus {
-        let workoutType = HKObjectType.workoutType()
-        guard let flightsType = HKObjectType.quantityType(forIdentifier: .flightsClimbed) else {
-            throw NSError(domain: "Health", code: 1)
-        }
-
-        let readTypes: Set<HKObjectType> = [workoutType, flightsType]
+        let readTypes = buildReadTypes()
         return try await withCheckedThrowingContinuation { continuation in
             store.getRequestStatusForAuthorization(toShare: [], read: readTypes) { status, error in
                 if let error = error {
@@ -918,9 +958,7 @@ final class HealthTrainingStore: ObservableObject {
 
     private func startObservingHealthUpdates() {
         guard !isObservingUpdates else { return }
-        guard let flightsType = HKObjectType.quantityType(forIdentifier: .flightsClimbed) else { return }
-
-        let types: [HKSampleType] = [HKObjectType.workoutType(), flightsType]
+        let types = buildObservedSampleTypes()
         observerQueries.removeAll()
 
         for type in types {
@@ -937,6 +975,34 @@ final class HealthTrainingStore: ObservableObject {
         }
 
         isObservingUpdates = true
+    }
+
+    private func buildReadTypes() -> Set<HKObjectType> {
+        var types: Set<HKObjectType> = [HKObjectType.workoutType()]
+        if let flights = HKObjectType.quantityType(forIdentifier: .flightsClimbed) {
+            types.insert(flights)
+        }
+        if let distance = HKObjectType.quantityType(forIdentifier: .distanceWalkingRunning) {
+            types.insert(distance)
+        }
+        if let steps = HKObjectType.quantityType(forIdentifier: .stepCount) {
+            types.insert(steps)
+        }
+        return types
+    }
+
+    private func buildObservedSampleTypes() -> [HKSampleType] {
+        var types: [HKSampleType] = [HKObjectType.workoutType()]
+        if let flights = HKObjectType.quantityType(forIdentifier: .flightsClimbed) {
+            types.append(flights)
+        }
+        if let distance = HKObjectType.quantityType(forIdentifier: .distanceWalkingRunning) {
+            types.append(distance)
+        }
+        if let steps = HKObjectType.quantityType(forIdentifier: .stepCount) {
+            types.append(steps)
+        }
+        return types
     }
 
     private func loadRecentWorkouts(days: Int) async throws -> [HKWorkout] {
@@ -966,6 +1032,24 @@ final class HealthTrainingStore: ObservableObject {
         guard let flightsType = HKObjectType.quantityType(forIdentifier: .flightsClimbed) else {
             return []
         }
+        return try await loadRecentQuantitySamples(type: flightsType, days: days)
+    }
+
+    private func loadRecentWalkingRunningDistance(days: Int) async throws -> [HKQuantitySample] {
+        guard let distanceType = HKObjectType.quantityType(forIdentifier: .distanceWalkingRunning) else {
+            return []
+        }
+        return try await loadRecentQuantitySamples(type: distanceType, days: days)
+    }
+
+    private func loadRecentSteps(days: Int) async throws -> [HKQuantitySample] {
+        guard let stepsType = HKObjectType.quantityType(forIdentifier: .stepCount) else {
+            return []
+        }
+        return try await loadRecentQuantitySamples(type: stepsType, days: days)
+    }
+
+    private func loadRecentQuantitySamples(type: HKQuantityType, days: Int) async throws -> [HKQuantitySample] {
         let start = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date()
         let predicate = HKQuery.predicateForSamples(withStart: start, end: Date(), options: .strictStartDate)
         let sort = [NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)]
@@ -986,6 +1070,12 @@ final class HealthTrainingStore: ObservableObject {
             }
             store.execute(query)
         }
+    }
+
+    private func dayKey(for date: Date) -> String {
+        let calendar = Calendar.current
+        let components = calendar.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
     }
 }
 #endif
