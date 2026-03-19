@@ -56,10 +56,28 @@ jobs:
       - name: Build (Debug, iOS Simulator)
         run: |
           set -euo pipefail
+          BUILD_LOG="$RUNNER_TEMP/xcodebuild-ci.log"
+          set +e
           xcodebuild \
             -project "$PROJECT_PATH" \
             -scheme "$SCHEME_NAME" \
             -configuration Debug \
             -destination "generic/platform=iOS Simulator" \
             CODE_SIGNING_ALLOWED=NO \
-            clean build
+            clean build \
+            2>&1 | tee "$BUILD_LOG"
+          BUILD_EXIT=${PIPESTATUS[0]}
+          set -e
+          if [ "$BUILD_EXIT" -ne 0 ]; then
+            echo "Build failed; compiler diagnostics:"
+            rg -n "error:|warning:" "$BUILD_LOG" || true
+            exit "$BUILD_EXIT"
+          fi
+
+      - name: Upload xcodebuild log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-ci-log
+          path: ${{ runner.temp }}/xcodebuild-ci.log
+          if-no-files-found: ignore
