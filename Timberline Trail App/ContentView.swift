@@ -864,6 +864,7 @@ final class HealthTrainingStore: ObservableObject {
         ]
         var walkingMilesByDay: [String: Double] = [:]
         var stepsByDay: [String: Double] = [:]
+        var workoutElevationFeetTotal: Double = 0
 
         for workout in workouts {
             let age = now.timeIntervalSince(workout.startDate)
@@ -872,6 +873,9 @@ final class HealthTrainingStore: ObservableObject {
             let miles = (workout.totalDistance?.doubleValue(for: .mile()) ?? 0)
             milesPerWeek[weekIndex] += miles
             activityDaysPerWeek[weekIndex].insert(dayKey(for: workout.startDate))
+            if let elevationMeters = workout.totalElevationAscended?.doubleValue(for: .meter()) {
+                workoutElevationFeetTotal += (elevationMeters * 3.28084)
+            }
         }
 
         for sample in walkingDistanceSamples {
@@ -917,7 +921,9 @@ final class HealthTrainingStore: ObservableObject {
         let flightsTotal = flights.reduce(0.0) { partial, sample in
             partial + sample.quantity.doubleValue(for: HKUnit.count())
         }
-        let elevationFeet = flights.isEmpty ? nil : flightsTotal * 10.0
+        let flightsElevationFeet = flights.isEmpty ? 0.0 : (flightsTotal * 10.0)
+        let combinedElevationFeet = max(workoutElevationFeetTotal, flightsElevationFeet)
+        let elevationFeet = combinedElevationFeet > 0 ? combinedElevationFeet : nil
 
         weeklyMilesHistory = milesPerWeek
         weeklyWorkoutsHistory = sessionsPerWeek
