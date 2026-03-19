@@ -864,6 +864,7 @@ final class HealthTrainingStore: ObservableObject {
         ]
         var walkingMilesByDay: [String: Double] = [:]
         var stepsByDay: [String: Double] = [:]
+        var workoutElevationFeetTotal: Double = 0
 
         for workout in workouts {
             let age = now.timeIntervalSince(workout.startDate)
@@ -872,6 +873,7 @@ final class HealthTrainingStore: ObservableObject {
             let miles = (workout.totalDistance?.doubleValue(for: .mile()) ?? 0)
             milesPerWeek[weekIndex] += miles
             activityDaysPerWeek[weekIndex].insert(dayKey(for: workout.startDate))
+            workoutElevationFeetTotal += workoutElevationFeet(workout)
         }
 
         for sample in walkingDistanceSamples {
@@ -917,7 +919,9 @@ final class HealthTrainingStore: ObservableObject {
         let flightsTotal = flights.reduce(0.0) { partial, sample in
             partial + sample.quantity.doubleValue(for: HKUnit.count())
         }
-        let elevationFeet = flights.isEmpty ? nil : flightsTotal * 10.0
+        let flightsElevationFeet = flights.isEmpty ? 0.0 : (flightsTotal * 10.0)
+        let combinedElevationFeet = max(workoutElevationFeetTotal, flightsElevationFeet)
+        let elevationFeet = combinedElevationFeet > 0 ? combinedElevationFeet : nil
 
         weeklyMilesHistory = milesPerWeek
         weeklyWorkoutsHistory = sessionsPerWeek
@@ -1082,6 +1086,19 @@ final class HealthTrainingStore: ObservableObject {
         let calendar = Calendar.current
         let components = calendar.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
+    }
+
+    private func workoutElevationFeet(_ workout: HKWorkout) -> Double {
+        if let quantity = workout.metadata?[HKMetadataKeyElevationAscended] as? HKQuantity {
+            return quantity.doubleValue(for: HKUnit.meter()) * 3.28084
+        }
+        if let meters = workout.metadata?[HKMetadataKeyElevationAscended] as? Double {
+            return meters * 3.28084
+        }
+        if let metersNumber = workout.metadata?[HKMetadataKeyElevationAscended] as? NSNumber {
+            return metersNumber.doubleValue * 3.28084
+        }
+        return 0
     }
 }
 #endif
