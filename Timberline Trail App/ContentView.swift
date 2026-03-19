@@ -1062,7 +1062,7 @@ final class HealthTrainingStore: ObservableObject {
 
         return try await withCheckedThrowingContinuation { continuation in
             let query = HKSampleQuery(
-                sampleType: flightsType,
+                sampleType: type,
                 predicate: predicate,
                 limit: HKObjectQueryNoLimit,
                 sortDescriptors: sort
