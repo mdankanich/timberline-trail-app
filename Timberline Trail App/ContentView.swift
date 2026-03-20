@@ -549,7 +549,7 @@ private func slugify(_ value: String) -> String {
         .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
 }
 
-private func importedTrailDataFromGPX(xml: String, fileName: String) throws -> ImportedTrailData {
+func importedTrailDataFromGPX(xml: String, fileName: String) throws -> ImportedTrailData {
     let trackPoints = extractGPXTrackPoints(xml: xml)
     guard trackPoints.count > 1 else {
         throw NSError(domain: "TrailImport", code: 1, userInfo: [NSLocalizedDescriptionKey: "The GPX file does not contain enough track points."])
@@ -698,7 +698,7 @@ private func importedTrailDataFromGPX(xml: String, fileName: String) throws -> I
     )
 }
 
-private func importedTrailPreview(from data: ImportedTrailData) -> TrailImportPreview {
+func importedTrailPreview(from data: ImportedTrailData) -> TrailImportPreview {
     TrailImportPreview(
         fileName: data.source.fileName,
         trailName: data.name,
