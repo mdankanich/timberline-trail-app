@@ -391,6 +391,34 @@ private func readXMLTag(_ tagName: String, in block: String) -> String {
     return decodeCDATA(String(block[valueRange]))
 }
 
+private func readXMLAttribute(_ attributeName: String, in attributes: String) -> String {
+    let pattern = "\(attributeName)\\s*=\\s*['\\\"]([^'\\\"]+)['\\\"]"
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+        return ""
+    }
+    let range = NSRange(attributes.startIndex..<attributes.endIndex, in: attributes)
+    guard let match = regex.firstMatch(in: attributes, options: [], range: range),
+          let valueRange = Range(match.range(at: 1), in: attributes) else {
+        return ""
+    }
+    return String(attributes[valueRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private func uniqueWaypointID(from source: String, used: inout Set<String>) -> String {
+    let base = slugify(source.isEmpty ? UUID().uuidString : source)
+    if !used.contains(base) {
+        used.insert(base)
+        return base
+    }
+    var counter = 2
+    while used.contains("\(base)-\(counter)") {
+        counter += 1
+    }
+    let candidate = "\(base)-\(counter)"
+    used.insert(candidate)
+    return candidate
+}
+
 private func roundValue(_ value: Double, decimals: Int = 2) -> Double {
     let divisor = pow(10.0, Double(decimals))
     return (value * divisor).rounded() / divisor
@@ -417,7 +445,7 @@ private func haversineMeters(
 }
 
 private func extractGPXTrackPoints(xml: String) -> [GPXTrackPoint] {
-    let pattern = #"<trkpt lat="([^"]+)" lon="([^"]+)">\s*<ele>([^<]+)</ele>\s*</trkpt>"#
+    let pattern = #"<trkpt([^>]*)>([\s\S]*?)</trkpt>"#
     guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
         return []
     }
@@ -426,13 +454,15 @@ private func extractGPXTrackPoints(xml: String) -> [GPXTrackPoint] {
     var points: [GPXTrackPoint] = []
     for match in matches {
         guard
-            let latRange = Range(match.range(at: 1), in: xml),
-            let lonRange = Range(match.range(at: 2), in: xml),
-            let eleRange = Range(match.range(at: 3), in: xml),
-            let latitude = Double(xml[latRange]),
-            let longitude = Double(xml[lonRange]),
-            let elevation = Double(xml[eleRange])
+            let attributesRange = Range(match.range(at: 1), in: xml),
+            let blockRange = Range(match.range(at: 2), in: xml)
         else { continue }
+        let attributes = String(xml[attributesRange])
+        let block = String(xml[blockRange])
+        let latitude = Double(readXMLAttribute("lat", in: attributes))
+        let longitude = Double(readXMLAttribute("lon", in: attributes))
+        let elevation = Double(readXMLTag("ele", in: block)) ?? (points.last?.elevation ?? 0)
+        guard let latitude, let longitude else { continue }
         let point = GPXTrackPoint(latitude: latitude, longitude: longitude, elevation: elevation)
         if points.last != point {
             points.append(point)
@@ -543,17 +573,26 @@ private func importedTrailDataFromGPX(xml: String, fileName: String) throws -> I
         if delta > 0 { elevationGainMeters += delta }
     }
 
-    let rawWaypoints: [TrailWaypoint] = extractGPXWaypoints(xml: xml).map { waypoint in
+    let extractedWaypoints = extractGPXWaypoints(xml: xml)
+    var rawWaypoints: [TrailWaypoint] = []
+    var usedWaypointIDs: Set<String> = []
+    var waypointCoordinatesByID: [String: (latitude: Double, longitude: Double)] = [:]
+    for waypoint in extractedWaypoints {
         let index = nearestTrackIndex(latitude: waypoint.latitude, longitude: waypoint.longitude, trackPoints: trackPoints)
-        return TrailWaypoint(
-            id: slugify(waypoint.name.isEmpty ? UUID().uuidString : waypoint.name),
+        let id = uniqueWaypointID(from: waypoint.name.isEmpty ? UUID().uuidString : waypoint.name, used: &usedWaypointIDs)
+        rawWaypoints.append(
+            TrailWaypoint(
+            id: id,
             name: waypoint.name.isEmpty ? "Waypoint" : waypoint.name,
             distanceFromStart: roundValue(cumulative[index], decimals: 2),
             type: classifyGPXWaypoint(name: waypoint.name, description: waypoint.description),
             dangerLevel: nil,
             summary: waypoint.description.isEmpty ? nil : waypoint.description
         )
-    }.sorted { $0.distanceFromStart < $1.distanceFromStart }
+        )
+        waypointCoordinatesByID[id] = (waypoint.latitude, waypoint.longitude)
+    }
+    rawWaypoints.sort { $0.distanceFromStart < $1.distanceFromStart }
 
     let coordinates = trackPoints.map {
         TrailCoordinate(latitude: roundValue($0.latitude, decimals: 6), longitude: roundValue($0.longitude, decimals: 6))
@@ -616,12 +655,13 @@ private func importedTrailDataFromGPX(xml: String, fileName: String) throws -> I
 
     let waterSources = rawWaypoints
         .filter { $0.type == .water }
-        .map {
+        .compactMap {
+            guard let coordinate = waypointCoordinatesByID[$0.id] else { return nil }
             WaterSource(
                 id: "water-\($0.id)",
                 name: $0.name,
-                latitude: 0,
-                longitude: 0,
+                latitude: coordinate.latitude,
+                longitude: coordinate.longitude,
                 status: .available,
                 seasonalNote: $0.summary,
                 distanceFromStart: $0.distanceFromStart
@@ -630,12 +670,13 @@ private func importedTrailDataFromGPX(xml: String, fileName: String) throws -> I
 
     let campsites = rawWaypoints
         .filter { $0.type == .campsite }
-        .map {
+        .compactMap {
+            guard let coordinate = waypointCoordinatesByID[$0.id] else { return nil }
             Campsite(
                 id: "camp-\($0.id)",
                 name: $0.name,
-                latitude: 0,
-                longitude: 0,
+                latitude: coordinate.latitude,
+                longitude: coordinate.longitude,
                 elevationFeet: 0,
                 distanceFromStart: $0.distanceFromStart,
                 waterProximity: .moderate,

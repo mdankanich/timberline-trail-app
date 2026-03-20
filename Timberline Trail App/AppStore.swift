@@ -50,6 +50,7 @@ final class AppStore: ObservableObject {
     private let tripService: TripService
     private let appContentService: AppContentService
     private let defaults = UserDefaults.standard
+    private let fileManager = FileManager.default
 
     init(environment: AppEnvironment = .live()) {
         self.authService = environment.authService
@@ -63,7 +64,7 @@ final class AppStore: ObservableObject {
         self.settings = environment.settingsService.loadSettings()
         self.profile = initialProfile
         self.safetyKeyNumbers = SafetyContent.fallback.keyNumbers
-        self.importedTrailData = PersistenceCodec.load(ImportedTrailData.self, key: AppPersistenceKeys.importedTrail, defaults: defaults)
+        self.importedTrailData = Self.loadImportedTrail(defaults: defaults)
 
         let tripSnapshot = environment.tripService.loadLocalTrips()
         self.trips = tripSnapshot.trips
@@ -279,12 +280,55 @@ final class AppStore: ObservableObject {
         let xml = try String(contentsOf: url, encoding: .utf8)
         let imported = try importedTrailDataFromGPX(xml: xml, fileName: url.lastPathComponent)
         importedTrailData = imported
-        PersistenceCodec.persist(imported, key: AppPersistenceKeys.importedTrail, defaults: defaults)
+        try Self.persistImportedTrail(imported, fileManager: fileManager, defaults: defaults)
     }
 
     func resetImportedTrail() {
         importedTrailData = nil
+        Self.removePersistedImportedTrail(fileManager: fileManager)
         defaults.removeObject(forKey: AppPersistenceKeys.importedTrail)
+    }
+
+    private static func loadImportedTrail(defaults: UserDefaults) -> ImportedTrailData? {
+        let decoder = JSONDecoder()
+        if let url = importedTrailFileURL(fileManager: .default),
+           let data = try? Data(contentsOf: url),
+           let decoded = try? decoder.decode(ImportedTrailData.self, from: data) {
+            return decoded
+        }
+
+        // Legacy fallback for older builds that stored trail JSON in UserDefaults.
+        if let legacy = PersistenceCodec.load(ImportedTrailData.self, key: AppPersistenceKeys.importedTrail, defaults: defaults) {
+            try? persistImportedTrail(legacy, fileManager: .default, defaults: defaults)
+            defaults.removeObject(forKey: AppPersistenceKeys.importedTrail)
+            return legacy
+        }
+        return nil
+    }
+
+    private static func persistImportedTrail(_ value: ImportedTrailData, fileManager: FileManager, defaults: UserDefaults) throws {
+        guard let url = importedTrailFileURL(fileManager: fileManager) else {
+            throw NSError(domain: "TrailImport", code: 10, userInfo: [NSLocalizedDescriptionKey: "Unable to resolve trail storage location."])
+        }
+        let directory = url.deletingLastPathComponent()
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: nil)
+        let data = try JSONEncoder().encode(value)
+        try data.write(to: url, options: [.atomic])
+        defaults.removeObject(forKey: AppPersistenceKeys.importedTrail)
+    }
+
+    private static func removePersistedImportedTrail(fileManager: FileManager) {
+        guard let url = importedTrailFileURL(fileManager: fileManager),
+              fileManager.fileExists(atPath: url.path) else { return }
+        try? fileManager.removeItem(at: url)
+    }
+
+    private static func importedTrailFileURL(fileManager: FileManager) -> URL? {
+        fileManager
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first?
+            .appendingPathComponent("TimberlineTrail", isDirectory: true)
+            .appendingPathComponent("imported-trail.json", isDirectory: false)
     }
 
     func createTrip(name: String, startDate: Date, endDate: Date) {
