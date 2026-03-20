@@ -39,6 +39,7 @@ final class AppStore: ObservableObject {
     @Published private(set) var isAuthLoading: Bool
     @Published private(set) var flowState: AppFlowState
     @Published private(set) var safetyKeyNumbers: [SafetyKeyNumber]
+    @Published private(set) var importedTrailData: ImportedTrailData?
 
     private var backgroundedAt: Date?
     private var currentNonce: String?
@@ -48,6 +49,7 @@ final class AppStore: ObservableObject {
     private let userService: UserService
     private let tripService: TripService
     private let appContentService: AppContentService
+    private let defaults = UserDefaults.standard
 
     init(environment: AppEnvironment = .live()) {
         self.authService = environment.authService
@@ -61,6 +63,7 @@ final class AppStore: ObservableObject {
         self.settings = environment.settingsService.loadSettings()
         self.profile = initialProfile
         self.safetyKeyNumbers = SafetyContent.fallback.keyNumbers
+        self.importedTrailData = PersistenceCodec.load(ImportedTrailData.self, key: AppPersistenceKeys.importedTrail, defaults: defaults)
 
         let tripSnapshot = environment.tripService.loadLocalTrips()
         self.trips = tripSnapshot.trips
@@ -220,6 +223,68 @@ final class AppStore: ObservableObject {
     func updateSettings(_ newSettings: AppSettings) {
         settings = newSettings
         settingsService.saveSettings(newSettings)
+    }
+
+    var activeTrailName: String {
+        importedTrailData?.name ?? "Timberline Trail"
+    }
+
+    var activeTrailDistanceMiles: Double {
+        importedTrailData?.totalDistanceMiles ?? 40.7
+    }
+
+    var activeTrailElevationGainFeet: Int {
+        importedTrailData?.totalElevationGainFeet ?? 9000
+    }
+
+    var activeTrailCoordinates: [TrailCoordinate] {
+        importedTrailData?.coordinates ?? timberlineTrailCoordinates
+    }
+
+    var activeTrailWaypoints: [TrailWaypoint] {
+        importedTrailData?.waypoints ?? timberlineTrailWaypoints
+    }
+
+    var activeTrailWaterSources: [WaterSource] {
+        importedTrailData?.waterSources ?? timberlineWaterSources
+    }
+
+    var activeTrailCampsites: [Campsite] {
+        importedTrailData?.campsites ?? timberlineCampsites
+    }
+
+    var activeTrailSourceLabel: String {
+        importedTrailData == nil ? "Bundled Timberline" : "Imported GPX"
+    }
+
+    func previewTrailImport(from url: URL) throws -> TrailImportPreview {
+        let accessGranted = url.startAccessingSecurityScopedResource()
+        defer {
+            if accessGranted {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+        let xml = try String(contentsOf: url, encoding: .utf8)
+        let imported = try importedTrailDataFromGPX(xml: xml, fileName: url.lastPathComponent)
+        return importedTrailPreview(from: imported)
+    }
+
+    func importTrail(from url: URL) throws {
+        let accessGranted = url.startAccessingSecurityScopedResource()
+        defer {
+            if accessGranted {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+        let xml = try String(contentsOf: url, encoding: .utf8)
+        let imported = try importedTrailDataFromGPX(xml: xml, fileName: url.lastPathComponent)
+        importedTrailData = imported
+        PersistenceCodec.persist(imported, key: AppPersistenceKeys.importedTrail, defaults: defaults)
+    }
+
+    func resetImportedTrail() {
+        importedTrailData = nil
+        defaults.removeObject(forKey: AppPersistenceKeys.importedTrail)
     }
 
     func createTrip(name: String, startDate: Date, endDate: Date) {
