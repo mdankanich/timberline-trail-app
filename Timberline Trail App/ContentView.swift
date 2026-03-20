@@ -98,7 +98,7 @@ enum AutoLockMinutes: Int, Codable, CaseIterable, Identifiable {
 }
 
 struct TrailCoordinate: Identifiable, Codable, Hashable {
-    let id = UUID()
+    var id = UUID()
     let latitude: Double
     let longitude: Double
 }
@@ -655,30 +655,30 @@ func importedTrailDataFromGPX(xml: String, fileName: String) throws -> ImportedT
 
     let waterSources = rawWaypoints
         .filter { $0.type == .water }
-        .compactMap {
-            guard let coordinate = waypointCoordinatesByID[$0.id] else { return nil }
-            WaterSource(
-                id: "water-\($0.id)",
-                name: $0.name,
+        .compactMap { waypoint -> WaterSource? in
+            guard let coordinate = waypointCoordinatesByID[waypoint.id] else { return nil }
+            return WaterSource(
+                id: "water-\(waypoint.id)",
+                name: waypoint.name,
                 latitude: coordinate.latitude,
                 longitude: coordinate.longitude,
                 status: .available,
-                seasonalNote: $0.summary,
-                distanceFromStart: $0.distanceFromStart
+                seasonalNote: waypoint.summary,
+                distanceFromStart: waypoint.distanceFromStart
             )
         }
 
     let campsites = rawWaypoints
         .filter { $0.type == .campsite }
-        .compactMap {
-            guard let coordinate = waypointCoordinatesByID[$0.id] else { return nil }
-            Campsite(
-                id: "camp-\($0.id)",
-                name: $0.name,
+        .compactMap { waypoint -> Campsite? in
+            guard let coordinate = waypointCoordinatesByID[waypoint.id] else { return nil }
+            return Campsite(
+                id: "camp-\(waypoint.id)",
+                name: waypoint.name,
                 latitude: coordinate.latitude,
                 longitude: coordinate.longitude,
                 elevationFeet: 0,
-                distanceFromStart: $0.distanceFromStart,
+                distanceFromStart: waypoint.distanceFromStart,
                 waterProximity: .moderate,
                 hasBearBox: false,
                 permitNotes: "Imported from GPX. Verify current permit rules.",
@@ -2123,11 +2123,11 @@ private struct MapHomeView: View {
             }
             .navigationTitle("Home")
             .navigationBarTitleDisplayMode(.large)
-            .toolbar {
+            .toolbar(content: {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     ProfileAvatarButton(store: store)
                 }
-            }
+            })
         }
         .navigationViewStyle(.stack)
     }
