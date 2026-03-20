@@ -10,6 +10,7 @@ import SwiftUI
 import AuthenticationServices
 import CryptoKit
 import Security
+import CoreLocation
 
 #if canImport(FirebaseAuth)
 import FirebaseAuth
@@ -227,35 +228,70 @@ final class AppStore: ObservableObject {
     }
 
     var activeTrailName: String {
-        importedTrailData?.name ?? "Timberline Trail"
+        importedTrailData?.name ?? "No GPX trail imported"
     }
 
     var activeTrailDistanceMiles: Double {
-        importedTrailData?.totalDistanceMiles ?? 40.7
+        importedTrailData?.totalDistanceMiles ?? 0
     }
 
     var activeTrailElevationGainFeet: Int {
-        importedTrailData?.totalElevationGainFeet ?? 9000
+        importedTrailData?.totalElevationGainFeet ?? 0
     }
 
     var activeTrailCoordinates: [TrailCoordinate] {
-        importedTrailData?.coordinates ?? timberlineTrailCoordinates
+        importedTrailData?.coordinates ?? []
     }
 
     var activeTrailWaypoints: [TrailWaypoint] {
-        importedTrailData?.waypoints ?? timberlineTrailWaypoints
+        (importedTrailData?.waypoints ?? []).sorted { $0.distanceFromStart < $1.distanceFromStart }
     }
 
     var activeTrailWaterSources: [WaterSource] {
-        importedTrailData?.waterSources ?? timberlineWaterSources
+        guard let imported = importedTrailData else { return [] }
+        let fromWaypoints = imported.waypoints
+            .filter { $0.type == .water }
+            .compactMap { waypoint -> WaterSource? in
+                guard let latitude = waypoint.latitude, let longitude = waypoint.longitude else { return nil }
+                return WaterSource(
+                    id: "water-\(waypoint.id)",
+                    name: waypoint.name,
+                    latitude: latitude,
+                    longitude: longitude,
+                    status: .available,
+                    seasonalNote: waypoint.summary,
+                    distanceFromStart: waypoint.distanceFromStart
+                )
+            }
+            .sorted { $0.distanceFromStart < $1.distanceFromStart }
+        return fromWaypoints.isEmpty ? imported.waterSources : fromWaypoints
     }
 
     var activeTrailCampsites: [Campsite] {
-        importedTrailData?.campsites ?? timberlineCampsites
+        guard let imported = importedTrailData else { return [] }
+        let fromWaypoints = imported.waypoints
+            .filter { $0.type == .campsite }
+            .compactMap { waypoint -> Campsite? in
+                guard let latitude = waypoint.latitude, let longitude = waypoint.longitude else { return nil }
+                return Campsite(
+                    id: "camp-\(waypoint.id)",
+                    name: waypoint.name,
+                    latitude: latitude,
+                    longitude: longitude,
+                    elevationFeet: 0,
+                    distanceFromStart: waypoint.distanceFromStart,
+                    waterProximity: .moderate,
+                    hasBearBox: false,
+                    permitNotes: waypoint.summary ?? "Imported GPX campsite",
+                    sites: 5
+                )
+            }
+            .sorted { $0.distanceFromStart < $1.distanceFromStart }
+        return fromWaypoints.isEmpty ? imported.campsites : fromWaypoints
     }
 
     var activeTrailSourceLabel: String {
-        importedTrailData == nil ? "Bundled Timberline" : "Imported GPX"
+        importedTrailData == nil ? "No Trail Loaded" : "Imported GPX"
     }
 
     func previewTrailImport(from url: URL) throws -> TrailImportPreview {
@@ -281,12 +317,90 @@ final class AppStore: ObservableObject {
         let imported = try importedTrailDataFromGPX(xml: xml, fileName: url.lastPathComponent)
         importedTrailData = imported
         try Self.persistImportedTrail(imported, fileManager: fileManager, defaults: defaults)
+        persistTrips()
     }
 
     func resetImportedTrail() {
         importedTrailData = nil
         Self.removePersistedImportedTrail(fileManager: fileManager)
         defaults.removeObject(forKey: AppPersistenceKeys.importedTrail)
+        persistTrips()
+    }
+
+    func canEditWaypoints() -> Bool {
+        session != nil && importedTrailData != nil
+    }
+
+    func updateWaypoint(
+        id: String,
+        name: String,
+        type: TrailWaypointType,
+        dangerLevel: DangerLevel?,
+        summary: String?,
+        editorName: String
+    ) throws {
+        guard canEditWaypoints(), var imported = importedTrailData else {
+            throw NSError(domain: "TrailImport", code: 20, userInfo: [NSLocalizedDescriptionKey: "Sign in and import a GPX trail before editing waypoints."])
+        }
+        guard let index = imported.waypoints.firstIndex(where: { $0.id == id }) else {
+            throw NSError(domain: "TrailImport", code: 21, userInfo: [NSLocalizedDescriptionKey: "Waypoint not found."])
+        }
+
+        imported.waypoints[index].name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        imported.waypoints[index].type = type
+        imported.waypoints[index].dangerLevel = dangerLevel
+        let note = summary?.trimmingCharacters(in: .whitespacesAndNewlines)
+        imported.waypoints[index].summary = (note?.isEmpty == true) ? nil : note
+        imported.waypoints[index].lastEditedBy = editorName
+        imported.waypoints[index].lastEditedAt = Date()
+        imported.waypoints.sort { $0.distanceFromStart < $1.distanceFromStart }
+
+        importedTrailData = imported
+        try Self.persistImportedTrail(imported, fileManager: fileManager, defaults: defaults)
+        persistTrips()
+    }
+
+    func addWaypointAtCurrentLocation(
+        name: String,
+        type: TrailWaypointType,
+        dangerLevel: DangerLevel?,
+        summary: String?,
+        latitude: Double,
+        longitude: Double,
+        editorName: String
+    ) throws {
+        guard canEditWaypoints(), var imported = importedTrailData else {
+            throw NSError(domain: "TrailImport", code: 22, userInfo: [NSLocalizedDescriptionKey: "Sign in and import a GPX trail before adding waypoints."])
+        }
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            throw NSError(domain: "TrailImport", code: 23, userInfo: [NSLocalizedDescriptionKey: "Waypoint name is required."])
+        }
+
+        let distanceFromStart = distanceFromStartMiles(
+            latitude: latitude,
+            longitude: longitude,
+            route: imported.coordinates
+        )
+
+        let waypoint = TrailWaypoint(
+            id: "wpt_" + String(UUID().uuidString.prefix(10)),
+            name: trimmedName,
+            distanceFromStart: distanceFromStart,
+            type: type,
+            dangerLevel: dangerLevel,
+            summary: summary?.trimmingCharacters(in: .whitespacesAndNewlines),
+            latitude: latitude,
+            longitude: longitude,
+            lastEditedBy: editorName,
+            lastEditedAt: Date()
+        )
+        imported.waypoints.append(waypoint)
+        imported.waypoints.sort { $0.distanceFromStart < $1.distanceFromStart }
+
+        importedTrailData = imported
+        try Self.persistImportedTrail(imported, fileManager: fileManager, defaults: defaults)
+        persistTrips()
     }
 
     private static func loadImportedTrail(defaults: UserDefaults) -> ImportedTrailData? {
@@ -329,6 +443,32 @@ final class AppStore: ObservableObject {
             .first?
             .appendingPathComponent("TimberlineTrail", isDirectory: true)
             .appendingPathComponent("imported-trail.json", isDirectory: false)
+    }
+
+    private func distanceFromStartMiles(
+        latitude: Double,
+        longitude: Double,
+        route: [TrailCoordinate]
+    ) -> Double {
+        guard !route.isEmpty else { return 0 }
+        var cumulativeMilesByIndex: [Double] = Array(repeating: 0, count: route.count)
+        for i in 1..<route.count {
+            let prev = CLLocation(latitude: route[i - 1].latitude, longitude: route[i - 1].longitude)
+            let next = CLLocation(latitude: route[i].latitude, longitude: route[i].longitude)
+            cumulativeMilesByIndex[i] = cumulativeMilesByIndex[i - 1] + (prev.distance(from: next) / 1609.344)
+        }
+
+        var bestIndex = 0
+        var bestDistance = Double.greatestFiniteMagnitude
+        let current = CLLocation(latitude: latitude, longitude: longitude)
+        for (index, point) in route.enumerated() {
+            let dist = current.distance(from: CLLocation(latitude: point.latitude, longitude: point.longitude))
+            if dist < bestDistance {
+                bestDistance = dist
+                bestIndex = index
+            }
+        }
+        return (cumulativeMilesByIndex[bestIndex] * 100).rounded() / 100
     }
 
     func createTrip(name: String, startDate: Date, endDate: Date) {
@@ -386,7 +526,7 @@ final class AppStore: ObservableObject {
     }
 
     private func persistTrips() {
-        let snapshot = TripsSnapshot(trips: trips, activeTripID: activeTripID)
+        let snapshot = TripsSnapshot(trips: trips, activeTripID: activeTripID, importedTrailData: importedTrailData)
         tripService.saveLocalTrips(snapshot)
         Task { await tripService.pushRemoteTrips(snapshot) }
     }
@@ -399,7 +539,11 @@ final class AppStore: ObservableObject {
         if let remoteTrips = await tripService.fetchRemoteTrips() {
             trips = remoteTrips.trips
             activeTripID = remoteTrips.activeTripID ?? remoteTrips.trips.first?.id
-            tripService.saveLocalTrips(TripsSnapshot(trips: trips, activeTripID: activeTripID))
+            if let remoteTrail = remoteTrips.importedTrailData {
+                importedTrailData = remoteTrail
+                try? Self.persistImportedTrail(remoteTrail, fileManager: fileManager, defaults: defaults)
+            }
+            tripService.saveLocalTrips(TripsSnapshot(trips: trips, activeTripID: activeTripID, importedTrailData: importedTrailData))
         }
         if let safetyContent = await appContentService.fetchSafetyContent() {
             safetyKeyNumbers = safetyContent.keyNumbers
