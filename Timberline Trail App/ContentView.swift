@@ -2123,11 +2123,7 @@ private struct MapHomeView: View {
             }
             .navigationTitle("Home")
             .navigationBarTitleDisplayMode(.large)
-            .toolbar(content: {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    ProfileAvatarButton(store: store)
-                }
-            })
+            .navigationBarItems(trailing: ProfileAvatarButton(store: store))
         }
         .navigationViewStyle(.stack)
     }
@@ -2287,11 +2283,11 @@ private struct TrailGuideView: View {
             .listStyle(.insetGrouped)
             .navigationTitle("Trail Guide")
             .navigationBarTitleDisplayMode(.large)
-            .toolbar {
+            .toolbar(content: {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     ProfileAvatarButton(store: store)
                 }
-            }
+            })
         }
         .navigationViewStyle(.stack)
     }
@@ -2334,7 +2330,7 @@ private struct WeatherDashboardView: View {
             .listStyle(.insetGrouped)
             .navigationTitle("Weather")
             .navigationBarTitleDisplayMode(.large)
-            .toolbar {
+            .toolbar(content: {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     ProfileAvatarButton(store: store)
                 }
@@ -2347,7 +2343,7 @@ private struct WeatherDashboardView: View {
                         }
                     }
                 }
-            }
+            })
             .task {
                 await weatherStore.refresh()
             }
@@ -2441,11 +2437,11 @@ private struct SafetyHubView: View {
             .listStyle(.insetGrouped)
             .navigationTitle("Safety")
             .navigationBarTitleDisplayMode(.large)
-            .toolbar {
+            .toolbar(content: {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     ProfileAvatarButton(store: store)
                 }
-            }
+            })
             .task {
                 if locationTracker.authorizationStatus == .notDetermined {
                     locationTracker.requestPermission()
@@ -2466,7 +2462,7 @@ private struct SafetyHubView: View {
                         Toggle("Primary Contact", isOn: $draftPrimary)
                     }
                     .navigationTitle("Add Contact")
-                    .toolbar {
+                    .toolbar(content: {
                         ToolbarItem(placement: .cancellationAction) {
                             Button("Cancel") { showingAdd = false }
                         }
@@ -2485,7 +2481,7 @@ private struct SafetyHubView: View {
                                 showingAdd = false
                             }
                         }
-                    }
+                    })
                 }
             }
         }
@@ -2625,11 +2621,11 @@ private struct TrainingReadinessView: View {
             .listStyle(.insetGrouped)
             .navigationTitle("Training")
             .navigationBarTitleDisplayMode(.large)
-            .toolbar {
+            .toolbar(content: {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     ProfileAvatarButton(store: store)
                 }
-            }
+            })
         }
         .navigationViewStyle(.stack)
     }
@@ -2745,7 +2741,7 @@ private struct TripsView: View {
             .listStyle(.insetGrouped)
             .navigationTitle("Trips")
             .navigationBarTitleDisplayMode(.large)
-            .toolbar {
+            .toolbar(content: {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     ProfileAvatarButton(store: store)
                 }
@@ -2756,7 +2752,7 @@ private struct TripsView: View {
                         Image(systemName: "plus")
                     }
                 }
-            }
+            })
             .sheet(isPresented: $isCreatingTrip) {
                 CreateTripView(store: store)
             }
@@ -2896,14 +2892,14 @@ private struct TripDetailView: View {
             .listStyle(.insetGrouped)
             .navigationTitle("Trip Details")
             .navigationBarTitleDisplayMode(.large)
-            .toolbar {
+            .toolbar(content: {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     ProfileAvatarButton(store: store)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
-            }
+            })
             .onAppear {
                 loadPackItems()
             }
@@ -2918,7 +2914,7 @@ private struct TripDetailView: View {
                         }
                     }
                     .navigationTitle(editingPackItemID == nil ? "Add Pack Item" : "Edit Pack Item")
-                    .toolbar {
+                    .toolbar(content: {
                         ToolbarItem(placement: .cancellationAction) {
                             Button("Cancel") { showPackEditor = false }
                         }
@@ -2927,7 +2923,7 @@ private struct TripDetailView: View {
                                 savePackEditor()
                             }
                         }
-                    }
+                    })
                 }
             }
         }
@@ -3028,7 +3024,7 @@ private struct CreateTripView: View {
             }
             .navigationTitle("New Trip")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
+            .toolbar(content: {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
@@ -3039,7 +3035,7 @@ private struct CreateTripView: View {
                     }
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-            }
+            })
         }
         .navigationViewStyle(.stack)
     }
@@ -3082,7 +3078,7 @@ private struct EditTripView: View {
             }
             .navigationTitle("Edit Trip")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
+            .toolbar(content: {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
@@ -3093,7 +3089,7 @@ private struct EditTripView: View {
                     }
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-            }
+            })
         }
         .navigationViewStyle(.stack)
     }
@@ -3309,11 +3305,7 @@ private struct SettingsView: View {
                     importErrorMessage = error.localizedDescription
                 }
             }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    ProfileAvatarButton(store: store)
-                }
-            }
+            .navigationBarItems(trailing: ProfileAvatarButton(store: store))
         }
         .navigationViewStyle(.stack)
     }
@@ -3379,13 +3371,13 @@ private struct ProfileView: View {
         }
         .navigationTitle("Profile")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
+        .toolbar(content: {
             ToolbarItem(placement: .navigationBarLeading) {
                 Button("Close") {
                     dismiss()
                 }
             }
-        }
+        })
         .onAppear {
             draftName = store.profile?.name ?? ""
             draftPhotoURI = store.profile?.photoURI
