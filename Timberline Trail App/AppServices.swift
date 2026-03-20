@@ -27,6 +27,7 @@ enum AppPersistenceKeys {
     static let settings = "phase1_settings"
     static let trips = "phase1_trips"
     static let activeTripID = "phase1_active_trip_id"
+    static let importedTrail = "phase1_imported_trail"
 }
 
 enum AuthServiceError: LocalizedError, Equatable {

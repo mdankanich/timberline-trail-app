@@ -12,6 +12,9 @@ import AuthenticationServices
 #if canImport(UIKit)
 import UIKit
 #endif
+#if canImport(UniformTypeIdentifiers)
+import UniformTypeIdentifiers
+#endif
 #if canImport(HealthKit)
 import HealthKit
 #endif
@@ -94,8 +97,8 @@ enum AutoLockMinutes: Int, Codable, CaseIterable, Identifiable {
     var id: Int { rawValue }
 }
 
-struct TrailCoordinate: Identifiable, Hashable {
-    let id = UUID()
+struct TrailCoordinate: Identifiable, Codable, Hashable {
+    var id = UUID()
     let latitude: Double
     let longitude: Double
 }
@@ -217,6 +220,37 @@ struct Campsite: Identifiable, Codable, Hashable {
     let sites: Int
 }
 
+struct ImportedTrailSourceInfo: Codable, Hashable {
+    let format: String
+    let fileName: String
+    let generatedAt: Date
+    let overlayApplied: String?
+}
+
+struct ImportedTrailData: Codable, Hashable {
+    let name: String
+    let totalDistanceMiles: Double
+    let totalElevationGainFeet: Int
+    let coordinates: [TrailCoordinate]
+    let waypoints: [TrailWaypoint]
+    let waterSources: [WaterSource]
+    let campsites: [Campsite]
+    let source: ImportedTrailSourceInfo
+}
+
+struct TrailImportPreview: Identifiable, Hashable {
+    let id = UUID()
+    let fileName: String
+    let trailName: String
+    let totalDistanceMiles: Double
+    let totalElevationGainFeet: Int
+    let trackPointCount: Int
+    let waypointCount: Int
+    let waterSourceCount: Int
+    let campsiteCount: Int
+    let overlayApplied: String?
+}
+
 struct EmergencyContact: Identifiable, Codable, Hashable {
     let id: String
     var name: String
@@ -319,6 +353,393 @@ let dangerousCrossingWaypointIDs: Set<String> = [
     "muddy-fork-crossing",
     "eliot-branch-crossing",
 ]
+
+private struct GPXTrackPoint: Hashable {
+    let latitude: Double
+    let longitude: Double
+    let elevation: Double
+}
+
+private func trailDistanceLabel(distanceMiles: Double, gainFeet: Int) -> String {
+    "\(String(format: "%.1f", distanceMiles)) miles • \(gainFeet.formatted()) ft elevation gain"
+}
+
+private func shouldApplyTimberlineOverlay(fileName: String, trailName: String) -> Bool {
+    let haystack = "\(fileName) \(trailName)".lowercased()
+    return haystack.contains("timberline")
+}
+
+private func decodeCDATA(_ value: String) -> String {
+    value.replacingOccurrences(
+        of: "<!\\[CDATA\\[(.*?)\\]\\]>",
+        with: "$1",
+        options: .regularExpression
+    )
+    .trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private func readXMLTag(_ tagName: String, in block: String) -> String {
+    let pattern = "<\(tagName)[^>]*>([\\s\\S]*?)</\(tagName)>"
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+        return ""
+    }
+    let range = NSRange(block.startIndex..<block.endIndex, in: block)
+    guard let match = regex.firstMatch(in: block, options: [], range: range),
+          let valueRange = Range(match.range(at: 1), in: block) else {
+        return ""
+    }
+    return decodeCDATA(String(block[valueRange]))
+}
+
+private func readXMLAttribute(_ attributeName: String, in attributes: String) -> String {
+    let pattern = "\(attributeName)\\s*=\\s*['\\\"]([^'\\\"]+)['\\\"]"
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+        return ""
+    }
+    let range = NSRange(attributes.startIndex..<attributes.endIndex, in: attributes)
+    guard let match = regex.firstMatch(in: attributes, options: [], range: range),
+          let valueRange = Range(match.range(at: 1), in: attributes) else {
+        return ""
+    }
+    return String(attributes[valueRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private func uniqueWaypointID(from source: String, used: inout Set<String>) -> String {
+    let base = slugify(source.isEmpty ? UUID().uuidString : source)
+    if !used.contains(base) {
+        used.insert(base)
+        return base
+    }
+    var counter = 2
+    while used.contains("\(base)-\(counter)") {
+        counter += 1
+    }
+    let candidate = "\(base)-\(counter)"
+    used.insert(candidate)
+    return candidate
+}
+
+private func roundValue(_ value: Double, decimals: Int = 2) -> Double {
+    let divisor = pow(10.0, Double(decimals))
+    return (value * divisor).rounded() / divisor
+}
+
+private func metersToFeet(_ value: Double) -> Int {
+    Int((value * 3.28084).rounded())
+}
+
+private func haversineMeters(
+    latitude1: Double,
+    longitude1: Double,
+    latitude2: Double,
+    longitude2: Double
+) -> Double {
+    let radius = 6_371_000.0
+    let lat1 = latitude1 * .pi / 180
+    let lat2 = latitude2 * .pi / 180
+    let dLat = (latitude2 - latitude1) * .pi / 180
+    let dLon = (longitude2 - longitude1) * .pi / 180
+    let a = sin(dLat / 2) * sin(dLat / 2)
+        + cos(lat1) * cos(lat2) * sin(dLon / 2) * sin(dLon / 2)
+    return radius * 2 * atan2(sqrt(a), sqrt(1 - a))
+}
+
+private func extractGPXTrackPoints(xml: String) -> [GPXTrackPoint] {
+    let pattern = #"<trkpt([^>]*)>([\s\S]*?)</trkpt>"#
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+        return []
+    }
+    let range = NSRange(xml.startIndex..<xml.endIndex, in: xml)
+    let matches = regex.matches(in: xml, options: [], range: range)
+    var points: [GPXTrackPoint] = []
+    for match in matches {
+        guard
+            let attributesRange = Range(match.range(at: 1), in: xml),
+            let blockRange = Range(match.range(at: 2), in: xml)
+        else { continue }
+        let attributes = String(xml[attributesRange])
+        let block = String(xml[blockRange])
+        let latitude = Double(readXMLAttribute("lat", in: attributes))
+        let longitude = Double(readXMLAttribute("lon", in: attributes))
+        let elevation = Double(readXMLTag("ele", in: block)) ?? (points.last?.elevation ?? 0)
+        guard let latitude, let longitude else { continue }
+        let point = GPXTrackPoint(latitude: latitude, longitude: longitude, elevation: elevation)
+        if points.last != point {
+            points.append(point)
+        }
+    }
+    return points
+}
+
+private func extractGPXWaypoints(xml: String) -> [(latitude: Double, longitude: Double, name: String, description: String)] {
+    let pattern = #"<wpt lat="([^"]+)" lon="([^"]+)">([\s\S]*?)</wpt>"#
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+        return []
+    }
+    let range = NSRange(xml.startIndex..<xml.endIndex, in: xml)
+    return regex.matches(in: xml, options: [], range: range).compactMap { match in
+        guard
+            let latRange = Range(match.range(at: 1), in: xml),
+            let lonRange = Range(match.range(at: 2), in: xml),
+            let blockRange = Range(match.range(at: 3), in: xml),
+            let latitude = Double(xml[latRange]),
+            let longitude = Double(xml[lonRange])
+        else { return nil }
+        let block = String(xml[blockRange])
+        return (
+            latitude: latitude,
+            longitude: longitude,
+            name: readXMLTag("name", in: block),
+            description: readXMLTag("desc", in: block)
+        )
+    }
+}
+
+private func cumulativeMiles(for points: [GPXTrackPoint]) -> [Double] {
+    guard !points.isEmpty else { return [] }
+    var cumulative = Array(repeating: 0.0, count: points.count)
+    for index in 1..<points.count {
+        cumulative[index] = cumulative[index - 1] + haversineMeters(
+            latitude1: points[index - 1].latitude,
+            longitude1: points[index - 1].longitude,
+            latitude2: points[index].latitude,
+            longitude2: points[index].longitude
+        ) / 1609.344
+    }
+    return cumulative
+}
+
+private func nearestTrackIndex(
+    latitude: Double,
+    longitude: Double,
+    trackPoints: [GPXTrackPoint]
+) -> Int {
+    var bestIndex = 0
+    var bestDistance = Double.greatestFiniteMagnitude
+    for (index, point) in trackPoints.enumerated() {
+        let distance = haversineMeters(
+            latitude1: latitude,
+            longitude1: longitude,
+            latitude2: point.latitude,
+            longitude2: point.longitude
+        )
+        if distance < bestDistance {
+            bestDistance = distance
+            bestIndex = index
+        }
+    }
+    return bestIndex
+}
+
+private func classifyGPXWaypoint(name: String, description: String) -> TrailWaypointType {
+    let text = "\(name) \(description)".lowercased()
+    if text.contains("lodge") || text.contains("trailhead") { return .trailhead }
+    if text.contains("shelter") || text.contains("inn") { return .shelter }
+    if text.contains("junction") || text.contains("cutoff") || text.contains("spur") { return .junction }
+    if text.contains("camp") { return .campsite }
+    if text.contains("river") || text.contains("creek") || text.contains("spring") || text.contains("water") { return .water }
+    if text.contains("falls") || text.contains("viewpoint") { return .viewpoint }
+    return .waypoint
+}
+
+private func slugify(_ value: String) -> String {
+    value
+        .lowercased()
+        .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
+        .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+}
+
+func importedTrailDataFromGPX(xml: String, fileName: String) throws -> ImportedTrailData {
+    let trackPoints = extractGPXTrackPoints(xml: xml)
+    guard trackPoints.count > 1 else {
+        throw NSError(domain: "TrailImport", code: 1, userInfo: [NSLocalizedDescriptionKey: "The GPX file does not contain enough track points."])
+    }
+
+    let metadataBlock = {
+        let pattern = #"<metadata>([\s\S]*?)</metadata>"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return "" }
+        let range = NSRange(xml.startIndex..<xml.endIndex, in: xml)
+        guard let match = regex.firstMatch(in: xml, options: [], range: range),
+              let blockRange = Range(match.range(at: 1), in: xml) else { return "" }
+        return String(xml[blockRange])
+    }()
+    let trailName = readXMLTag("name", in: metadataBlock)
+    let cumulative = cumulativeMiles(for: trackPoints)
+    let totalDistance = roundValue(cumulative.last ?? 0, decimals: 2)
+
+    var elevationGainMeters = 0.0
+    for index in 1..<trackPoints.count {
+        let delta = trackPoints[index].elevation - trackPoints[index - 1].elevation
+        if delta > 0 { elevationGainMeters += delta }
+    }
+
+    let extractedWaypoints = extractGPXWaypoints(xml: xml)
+    var rawWaypoints: [TrailWaypoint] = []
+    var usedWaypointIDs: Set<String> = []
+    var waypointCoordinatesByID: [String: (latitude: Double, longitude: Double)] = [:]
+    for waypoint in extractedWaypoints {
+        let index = nearestTrackIndex(latitude: waypoint.latitude, longitude: waypoint.longitude, trackPoints: trackPoints)
+        let id = uniqueWaypointID(from: waypoint.name.isEmpty ? UUID().uuidString : waypoint.name, used: &usedWaypointIDs)
+        rawWaypoints.append(
+            TrailWaypoint(
+            id: id,
+            name: waypoint.name.isEmpty ? "Waypoint" : waypoint.name,
+            distanceFromStart: roundValue(cumulative[index], decimals: 2),
+            type: classifyGPXWaypoint(name: waypoint.name, description: waypoint.description),
+            dangerLevel: nil,
+            summary: waypoint.description.isEmpty ? nil : waypoint.description
+        )
+        )
+        waypointCoordinatesByID[id] = (waypoint.latitude, waypoint.longitude)
+    }
+    rawWaypoints.sort { $0.distanceFromStart < $1.distanceFromStart }
+
+    let coordinates = trackPoints.map {
+        TrailCoordinate(latitude: roundValue($0.latitude, decimals: 6), longitude: roundValue($0.longitude, decimals: 6))
+    }
+
+    if shouldApplyTimberlineOverlay(fileName: fileName, trailName: trailName) {
+        let adjustedWaypoints = timberlineTrailWaypoints.map { waypoint in
+            guard let coordinate = coordinateForKnownWaypoint(waypoint.id) else { return waypoint }
+            let index = nearestTrackIndex(latitude: coordinate.latitude, longitude: coordinate.longitude, trackPoints: trackPoints)
+            var copy = waypoint
+            copy.distanceFromStart = waypoint.id == "timberline-lodge" ? 0 : roundValue(cumulative[index], decimals: 2)
+            return copy
+        }.sorted { $0.distanceFromStart < $1.distanceFromStart }
+
+        let adjustedWater = timberlineWaterSources.map { source in
+            let index = nearestTrackIndex(latitude: source.latitude, longitude: source.longitude, trackPoints: trackPoints)
+            return WaterSource(
+                id: source.id,
+                name: source.name,
+                latitude: source.latitude,
+                longitude: source.longitude,
+                status: source.status,
+                seasonalNote: source.seasonalNote,
+                distanceFromStart: roundValue(cumulative[index], decimals: 2)
+            )
+        }.sorted { $0.distanceFromStart < $1.distanceFromStart }
+
+        let adjustedCamps = timberlineCampsites.map { campsite in
+            let index = nearestTrackIndex(latitude: campsite.latitude, longitude: campsite.longitude, trackPoints: trackPoints)
+            return Campsite(
+                id: campsite.id,
+                name: campsite.name,
+                latitude: campsite.latitude,
+                longitude: campsite.longitude,
+                elevationFeet: metersToFeet(trackPoints[index].elevation),
+                distanceFromStart: roundValue(cumulative[index], decimals: 2),
+                waterProximity: campsite.waterProximity,
+                hasBearBox: campsite.hasBearBox,
+                permitNotes: campsite.permitNotes,
+                sites: campsite.sites
+            )
+        }.sorted { $0.distanceFromStart < $1.distanceFromStart }
+
+        return ImportedTrailData(
+            name: trailName.isEmpty ? "Timberline Trail" : trailName,
+            totalDistanceMiles: totalDistance,
+            totalElevationGainFeet: metersToFeet(elevationGainMeters),
+            coordinates: coordinates,
+            waypoints: adjustedWaypoints,
+            waterSources: adjustedWater,
+            campsites: adjustedCamps,
+            source: ImportedTrailSourceInfo(
+                format: "gpx",
+                fileName: fileName,
+                generatedAt: Date(),
+                overlayApplied: "timberline-curated"
+            )
+        )
+    }
+
+    let waterSources = rawWaypoints
+        .filter { $0.type == .water }
+        .compactMap { waypoint -> WaterSource? in
+            guard let coordinate = waypointCoordinatesByID[waypoint.id] else { return nil }
+            return WaterSource(
+                id: "water-\(waypoint.id)",
+                name: waypoint.name,
+                latitude: coordinate.latitude,
+                longitude: coordinate.longitude,
+                status: .available,
+                seasonalNote: waypoint.summary,
+                distanceFromStart: waypoint.distanceFromStart
+            )
+        }
+
+    let campsites = rawWaypoints
+        .filter { $0.type == .campsite }
+        .compactMap { waypoint -> Campsite? in
+            guard let coordinate = waypointCoordinatesByID[waypoint.id] else { return nil }
+            return Campsite(
+                id: "camp-\(waypoint.id)",
+                name: waypoint.name,
+                latitude: coordinate.latitude,
+                longitude: coordinate.longitude,
+                elevationFeet: 0,
+                distanceFromStart: waypoint.distanceFromStart,
+                waterProximity: .moderate,
+                hasBearBox: false,
+                permitNotes: "Imported from GPX. Verify current permit rules.",
+                sites: 5
+            )
+        }
+
+    return ImportedTrailData(
+        name: trailName.isEmpty ? "Imported Trail" : trailName,
+        totalDistanceMiles: totalDistance,
+        totalElevationGainFeet: metersToFeet(elevationGainMeters),
+        coordinates: coordinates,
+        waypoints: rawWaypoints,
+        waterSources: waterSources,
+        campsites: campsites,
+        source: ImportedTrailSourceInfo(format: "gpx", fileName: fileName, generatedAt: Date(), overlayApplied: nil)
+    )
+}
+
+func importedTrailPreview(from data: ImportedTrailData) -> TrailImportPreview {
+    TrailImportPreview(
+        fileName: data.source.fileName,
+        trailName: data.name,
+        totalDistanceMiles: data.totalDistanceMiles,
+        totalElevationGainFeet: data.totalElevationGainFeet,
+        trackPointCount: data.coordinates.count,
+        waypointCount: data.waypoints.count,
+        waterSourceCount: data.waterSources.count,
+        campsiteCount: data.campsites.count,
+        overlayApplied: data.source.overlayApplied
+    )
+}
+
+private func coordinateForKnownWaypoint(_ id: String) -> CLLocationCoordinate2D? {
+    switch id {
+    case "timberline-lodge", "timberline-lodge-end":
+        return CLLocationCoordinate2D(latitude: 45.331309, longitude: -121.711307)
+    case "paradise-park-camp":
+        return CLLocationCoordinate2D(latitude: 45.3415, longitude: -121.7335)
+    case "sandy-river-crossing":
+        return CLLocationCoordinate2D(latitude: 45.3649, longitude: -121.7562)
+    case "ramona-falls":
+        return CLLocationCoordinate2D(latitude: 45.380668, longitude: -121.777267)
+    case "muddy-fork-crossing":
+        return CLLocationCoordinate2D(latitude: 45.4022, longitude: -121.7890)
+    case "cairn-basin":
+        return CLLocationCoordinate2D(latitude: 45.4040, longitude: -121.72314)
+    case "elk-cove":
+        return CLLocationCoordinate2D(latitude: 45.40992, longitude: -121.6983)
+    case "cloud-cap":
+        return CLLocationCoordinate2D(latitude: 45.40261, longitude: -121.65539)
+    case "eliot-branch-crossing":
+        return CLLocationCoordinate2D(latitude: 45.3981, longitude: -121.6688)
+    case "cooper-spur-junction":
+        return CLLocationCoordinate2D(latitude: 45.3898, longitude: -121.6764)
+    case "umbrella-falls":
+        return CLLocationCoordinate2D(latitude: 45.3548, longitude: -121.6533)
+    default:
+        return nil
+    }
+}
 
 func daysUntil(_ isoDate: String?, now: Date = Date()) -> Int {
     guard let isoDate = isoDate else { return 0 }
@@ -976,7 +1397,7 @@ final class HealthTrainingStore: ObservableObject {
             let query = HKObserverQuery(sampleType: type, predicate: nil) { [weak self] _, completionHandler, _ in
                 Task { @MainActor [weak self] in
                     defer { completionHandler() }
-                    guard let self else { return }
+                    guard let self = self else { return }
                     await self.sync()
                 }
             }
@@ -1611,7 +2032,7 @@ private struct MapHomeView: View {
         NavigationView {
             VStack(spacing: 0) {
                 TrailMapView(
-                    route: timberlineTrailCoordinates,
+                    route: store.activeTrailCoordinates,
                     userLocation: locationTracker.latestLocation,
                     mapType: store.settings.mapType
                 )
@@ -1619,9 +2040,9 @@ private struct MapHomeView: View {
 
                 List {
                     Section("Trail") {
-                        StatRow(label: "Route", value: "Timberline Trail")
-                        StatRow(label: "Distance", value: "40.7 mi")
-                        StatRow(label: "Elevation Gain", value: "9,000 ft")
+                        StatRow(label: "Route", value: store.activeTrailName)
+                        StatRow(label: "Distance", value: String(format: "%.1f mi", store.activeTrailDistanceMiles))
+                        StatRow(label: "Elevation Gain", value: "\(store.activeTrailElevationGainFeet.formatted()) ft")
                     }
 
                     Section("Location") {
@@ -1702,11 +2123,7 @@ private struct MapHomeView: View {
             }
             .navigationTitle("Home")
             .navigationBarTitleDisplayMode(.large)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    ProfileAvatarButton(store: store)
-                }
-            }
+            .navigationBarItems(trailing: ProfileAvatarButton(store: store))
         }
         .navigationViewStyle(.stack)
     }
@@ -1755,12 +2172,12 @@ private struct NavigationDashboardView: View {
 
                 Section("Progress") {
                     let nearest = computedNearestIndex()
-                    let remaining = distanceRemainingMiles(route: timberlineTrailCoordinates, nearestIndex: nearest)
-                    let traveled = max(0, 40.7 - remaining)
+                    let remaining = distanceRemainingMiles(route: store.activeTrailCoordinates, nearestIndex: nearest)
+                    let traveled = max(0, store.activeTrailDistanceMiles - remaining)
                     StatRow(label: "Current Segment", value: segmentLabel(for: traveled))
                     StatRow(label: "Distance Remaining", value: String(format: "%.1f mi", remaining))
                     StatRow(label: "ETA @ 2.0 mph", value: String(format: "%.1f hrs", etaHours(distanceRemainingMiles: remaining)))
-                    if let next = nextWaypoint(distanceFromStartMiles: traveled, waypoints: timberlineTrailWaypoints) {
+                    if let next = nextWaypoint(distanceFromStartMiles: traveled, waypoints: store.activeTrailWaypoints) {
                         StatRow(label: "Next Waypoint", value: "\(next.name) (\(String(format: "%.1f", next.distanceFromStart)) mi)")
                     } else {
                         StatRow(label: "Next Waypoint", value: "Loop complete")
@@ -1769,7 +2186,7 @@ private struct NavigationDashboardView: View {
 
                 Section("Conditions") {
                     StatRow(label: "Trail", value: "Open with caution at river crossings")
-                    ForEach(timberlineTrailWaypoints.filter { dangerousCrossingWaypointIDs.contains($0.id) }) { crossing in
+                    ForEach(store.activeTrailWaypoints.filter { dangerousCrossingWaypointIDs.contains($0.id) }) { crossing in
                         if let summary = crossing.summary {
                             Text("• \(crossing.name): \(summary)")
                                 .font(.footnote)
@@ -1780,11 +2197,7 @@ private struct NavigationDashboardView: View {
             .listStyle(.insetGrouped)
             .navigationTitle("Navigate")
             .navigationBarTitleDisplayMode(.large)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    ProfileAvatarButton(store: store)
-                }
-            }
+            .navigationBarItems(trailing: ProfileAvatarButton(store: store))
         }
         .navigationViewStyle(.stack)
     }
@@ -1792,7 +2205,7 @@ private struct NavigationDashboardView: View {
     private func computedNearestIndex() -> Int {
         guard let location = locationTracker.latestLocation else { return 0 }
         let index = nearestRouteIndex(
-            route: timberlineTrailCoordinates,
+            route: store.activeTrailCoordinates,
             userLocation: location.coordinate,
             lastIndex: lastRouteIndex,
             windowRadius: 25
@@ -1811,21 +2224,21 @@ private struct NavigationDashboardView: View {
 
 private struct TrailGuideView: View {
     @ObservedObject var store: AppStore
-    private let campsites = timberlineCampsites.sorted(by: { $0.distanceFromStart < $1.distanceFromStart })
-    private let waterSources = timberlineWaterSources.sorted(by: { $0.distanceFromStart < $1.distanceFromStart })
 
     var body: some View {
+        let campsites = store.activeTrailCampsites.sorted(by: { $0.distanceFromStart < $1.distanceFromStart })
+        let waterSources = store.activeTrailWaterSources.sorted(by: { $0.distanceFromStart < $1.distanceFromStart })
         NavigationView {
             List {
                 Section("Trail Overview") {
-                    Text("Timberline Trail - Mount Hood, Oregon")
+                    Text("\(store.activeTrailName) - Mount Hood, Oregon")
                         .font(.headline)
-                    Text("40.7 miles • 9,000 ft elevation gain • Typical duration 3-5 days")
+                    Text(trailDistanceLabel(distanceMiles: store.activeTrailDistanceMiles, gainFeet: store.activeTrailElevationGainFeet) + " • Typical duration 3-5 days")
                     Text("Best season: July through September")
                 }
 
                 Section("Dangerous Crossings") {
-                    ForEach(timberlineTrailWaypoints.filter { dangerousCrossingWaypointIDs.contains($0.id) }) { waypoint in
+                    ForEach(store.activeTrailWaypoints.filter { dangerousCrossingWaypointIDs.contains($0.id) }) { waypoint in
                         VStack(alignment: .leading, spacing: 4) {
                             Text(waypoint.name)
                                 .font(.subheadline.bold())
@@ -1870,11 +2283,11 @@ private struct TrailGuideView: View {
             .listStyle(.insetGrouped)
             .navigationTitle("Trail Guide")
             .navigationBarTitleDisplayMode(.large)
-            .toolbar {
+            .toolbar(content: {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     ProfileAvatarButton(store: store)
                 }
-            }
+            })
         }
         .navigationViewStyle(.stack)
     }
@@ -1917,7 +2330,7 @@ private struct WeatherDashboardView: View {
             .listStyle(.insetGrouped)
             .navigationTitle("Weather")
             .navigationBarTitleDisplayMode(.large)
-            .toolbar {
+            .toolbar(content: {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     ProfileAvatarButton(store: store)
                 }
@@ -1930,7 +2343,7 @@ private struct WeatherDashboardView: View {
                         }
                     }
                 }
-            }
+            })
             .task {
                 await weatherStore.refresh()
             }
@@ -2024,11 +2437,11 @@ private struct SafetyHubView: View {
             .listStyle(.insetGrouped)
             .navigationTitle("Safety")
             .navigationBarTitleDisplayMode(.large)
-            .toolbar {
+            .toolbar(content: {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     ProfileAvatarButton(store: store)
                 }
-            }
+            })
             .task {
                 if locationTracker.authorizationStatus == .notDetermined {
                     locationTracker.requestPermission()
@@ -2049,7 +2462,7 @@ private struct SafetyHubView: View {
                         Toggle("Primary Contact", isOn: $draftPrimary)
                     }
                     .navigationTitle("Add Contact")
-                    .toolbar {
+                    .toolbar(content: {
                         ToolbarItem(placement: .cancellationAction) {
                             Button("Cancel") { showingAdd = false }
                         }
@@ -2068,7 +2481,7 @@ private struct SafetyHubView: View {
                                 showingAdd = false
                             }
                         }
-                    }
+                    })
                 }
             }
         }
@@ -2208,11 +2621,11 @@ private struct TrainingReadinessView: View {
             .listStyle(.insetGrouped)
             .navigationTitle("Training")
             .navigationBarTitleDisplayMode(.large)
-            .toolbar {
+            .toolbar(content: {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     ProfileAvatarButton(store: store)
                 }
-            }
+            })
         }
         .navigationViewStyle(.stack)
     }
@@ -2328,7 +2741,7 @@ private struct TripsView: View {
             .listStyle(.insetGrouped)
             .navigationTitle("Trips")
             .navigationBarTitleDisplayMode(.large)
-            .toolbar {
+            .toolbar(content: {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     ProfileAvatarButton(store: store)
                 }
@@ -2339,7 +2752,7 @@ private struct TripsView: View {
                         Image(systemName: "plus")
                     }
                 }
-            }
+            })
             .sheet(isPresented: $isCreatingTrip) {
                 CreateTripView(store: store)
             }
@@ -2467,7 +2880,7 @@ private struct TripDetailView: View {
                     }
 
                     Section("Trail Highlights") {
-                        ForEach(timberlineTrailWaypoints.prefix(6)) { waypoint in
+                        ForEach(store.activeTrailWaypoints.prefix(6)) { waypoint in
                             Text("• Mile \(String(format: "%.1f", waypoint.distanceFromStart)) - \(waypoint.name)")
                         }
                     }
@@ -2479,14 +2892,14 @@ private struct TripDetailView: View {
             .listStyle(.insetGrouped)
             .navigationTitle("Trip Details")
             .navigationBarTitleDisplayMode(.large)
-            .toolbar {
+            .toolbar(content: {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     ProfileAvatarButton(store: store)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
-            }
+            })
             .onAppear {
                 loadPackItems()
             }
@@ -2501,7 +2914,7 @@ private struct TripDetailView: View {
                         }
                     }
                     .navigationTitle(editingPackItemID == nil ? "Add Pack Item" : "Edit Pack Item")
-                    .toolbar {
+                    .toolbar(content: {
                         ToolbarItem(placement: .cancellationAction) {
                             Button("Cancel") { showPackEditor = false }
                         }
@@ -2510,7 +2923,7 @@ private struct TripDetailView: View {
                                 savePackEditor()
                             }
                         }
-                    }
+                    })
                 }
             }
         }
@@ -2611,7 +3024,7 @@ private struct CreateTripView: View {
             }
             .navigationTitle("New Trip")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
+            .toolbar(content: {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
@@ -2622,7 +3035,7 @@ private struct CreateTripView: View {
                     }
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-            }
+            })
         }
         .navigationViewStyle(.stack)
     }
@@ -2665,7 +3078,7 @@ private struct EditTripView: View {
             }
             .navigationTitle("Edit Trip")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
+            .toolbar(content: {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
@@ -2676,7 +3089,7 @@ private struct EditTripView: View {
                     }
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-            }
+            })
         }
         .navigationViewStyle(.stack)
     }
@@ -2684,6 +3097,10 @@ private struct EditTripView: View {
 
 private struct SettingsView: View {
     @ObservedObject var store: AppStore
+    @State private var isImportingFile = false
+    @State private var pendingImportURL: URL?
+    @State private var pendingImportPreview: TrailImportPreview?
+    @State private var importErrorMessage: String?
 
     var body: some View {
         NavigationView {
@@ -2797,6 +3214,73 @@ private struct SettingsView: View {
                     }
                 }
 
+                Section("Trail Data") {
+                    StatRow(label: "Active Source", value: store.activeTrailSourceLabel)
+                    if let imported = store.importedTrailData {
+                        StatRow(label: "Imported File", value: imported.source.fileName)
+                        StatRow(label: "Imported At", value: imported.source.generatedAt.formatted(date: .abbreviated, time: .shortened))
+                        StatRow(label: "Overlay", value: imported.source.overlayApplied == "timberline-curated" ? "Timberline curated metadata" : "Raw GPX-derived")
+                    }
+                    StatRow(label: "Distance / Gain", value: trailDistanceLabel(distanceMiles: store.activeTrailDistanceMiles, gainFeet: store.activeTrailElevationGainFeet))
+
+                    Button("Choose GPX File") {
+                        importErrorMessage = nil
+                        isImportingFile = true
+                    }
+
+                    if let preview = pendingImportPreview {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Import Preview")
+                                .font(.headline)
+                            Text(preview.fileName)
+                                .font(.subheadline)
+                            Text(preview.trailName)
+                                .foregroundColor(.secondary)
+                            Text(trailDistanceLabel(distanceMiles: preview.totalDistanceMiles, gainFeet: preview.totalElevationGainFeet))
+                                .font(.footnote)
+                            Text("\(preview.trackPointCount.formatted()) track points • \(preview.waypointCount) waypoints • \(preview.waterSourceCount) water • \(preview.campsiteCount) camps")
+                                .font(.footnote)
+                                .foregroundColor(.secondary)
+                            Text(preview.overlayApplied == "timberline-curated" ? "Timberline curated metadata will be applied." : "Metadata will be derived from the GPX.")
+                                .font(.footnote)
+                                .foregroundColor(.secondary)
+
+                            HStack {
+                                Button("Cancel", role: .cancel) {
+                                    pendingImportPreview = nil
+                                    pendingImportURL = nil
+                                }
+                                Spacer()
+                                Button("Confirm Import") {
+                                    guard let url = pendingImportURL else { return }
+                                    do {
+                                        try store.importTrail(from: url)
+                                        pendingImportPreview = nil
+                                        pendingImportURL = nil
+                                    } catch {
+                                        importErrorMessage = error.localizedDescription
+                                    }
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+                        }
+                    }
+
+                    if store.importedTrailData != nil {
+                        Button("Use Bundled Trail", role: .destructive) {
+                            pendingImportPreview = nil
+                            pendingImportURL = nil
+                            store.resetImportedTrail()
+                        }
+                    }
+
+                    if let importErrorMessage = importErrorMessage {
+                        Text(importErrorMessage)
+                            .font(.footnote)
+                            .foregroundColor(.red)
+                    }
+                }
+
                 Section("Account") {
                     Button("Sign Out", role: .destructive) {
                         store.signOut()
@@ -2805,11 +3289,23 @@ private struct SettingsView: View {
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    ProfileAvatarButton(store: store)
+            .fileImporter(
+                isPresented: $isImportingFile,
+                allowedContentTypes: allowedGPXImportTypes,
+                allowsMultipleSelection: false
+            ) { result in
+                do {
+                    let selectedURL = try result.get().first
+                    guard let url = selectedURL else { return }
+                    let preview = try store.previewTrailImport(from: url)
+                    pendingImportURL = url
+                    pendingImportPreview = preview
+                    importErrorMessage = nil
+                } catch {
+                    importErrorMessage = error.localizedDescription
                 }
             }
+            .navigationBarItems(trailing: ProfileAvatarButton(store: store))
         }
         .navigationViewStyle(.stack)
     }
@@ -2820,6 +3316,10 @@ private struct SettingsView: View {
         return value.isEmpty ? "H" : value
     }
 }
+
+#if canImport(UniformTypeIdentifiers)
+private let allowedGPXImportTypes: [UTType] = [.xml, .data]
+#endif
 
 private struct ProfileView: View {
     @Environment(\.dismiss) private var dismiss
@@ -2871,13 +3371,13 @@ private struct ProfileView: View {
         }
         .navigationTitle("Profile")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
+        .toolbar(content: {
             ToolbarItem(placement: .navigationBarLeading) {
                 Button("Close") {
                     dismiss()
                 }
             }
-        }
+        })
         .onAppear {
             draftName = store.profile?.name ?? ""
             draftPhotoURI = store.profile?.photoURI
