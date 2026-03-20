@@ -2201,11 +2201,7 @@ private struct NavigationDashboardView: View {
             .listStyle(.insetGrouped)
             .navigationTitle("Navigate")
             .navigationBarTitleDisplayMode(.large)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    ProfileAvatarButton(store: store)
-                }
-            }
+            .navigationBarItems(trailing: ProfileAvatarButton(store: store))
         }
         .navigationViewStyle(.stack)
     }
