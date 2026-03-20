@@ -18,6 +18,7 @@ import FirebaseFirestore
 struct TripsSnapshot: Codable, Hashable {
     var trips: [Trip]
     var activeTripID: String?
+    var importedTrailData: ImportedTrailData?
 }
 
 enum AppPersistenceKeys {
@@ -300,7 +301,7 @@ final class LocalTripService: TripService {
             activeTripID = trips.first?.id
             defaults.set(activeTripID, forKey: AppPersistenceKeys.activeTripID)
         }
-        return TripsSnapshot(trips: trips, activeTripID: activeTripID)
+        return TripsSnapshot(trips: trips, activeTripID: activeTripID, importedTrailData: nil)
     }
 
     func saveLocalTrips(_ snapshot: TripsSnapshot) {
@@ -382,13 +383,14 @@ final class FirebaseUserCloudService: UserService {
 }
 
 final class FirebaseTripCloudService: TripService {
-    func loadLocalTrips() -> TripsSnapshot { TripsSnapshot(trips: [], activeTripID: nil) }
+    func loadLocalTrips() -> TripsSnapshot { TripsSnapshot(trips: [], activeTripID: nil, importedTrailData: nil) }
     func saveLocalTrips(_ snapshot: TripsSnapshot) {}
     func clearLocalTrips() {}
 
     private struct CloudTripsPayload: Codable {
         var trips: [Trip]
         var activeTripId: String?
+        var importedTrailData: ImportedTrailData?
     }
 
     func fetchRemoteTrips() async -> TripsSnapshot? {
@@ -407,7 +409,7 @@ final class FirebaseTripCloudService: TripService {
                         continuation.resume(returning: nil)
                         return
                     }
-                    continuation.resume(returning: TripsSnapshot(trips: remote.trips, activeTripID: remote.activeTripId))
+                    continuation.resume(returning: TripsSnapshot(trips: remote.trips, activeTripID: remote.activeTripId, importedTrailData: remote.importedTrailData))
                 }
         }
     }
@@ -416,7 +418,7 @@ final class FirebaseTripCloudService: TripService {
         guard
             let uid = Auth.auth().currentUser?.uid,
             let encoded = FirestoreCodec.encode(
-                CloudTripsPayload(trips: snapshot.trips, activeTripId: snapshot.activeTripID)
+                CloudTripsPayload(trips: snapshot.trips, activeTripId: snapshot.activeTripID, importedTrailData: snapshot.importedTrailData)
             )
         else { return }
 

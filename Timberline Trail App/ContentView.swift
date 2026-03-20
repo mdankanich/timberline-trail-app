@@ -166,6 +166,10 @@ struct TrailWaypoint: Identifiable, Codable, Hashable {
     var type: TrailWaypointType = .waypoint
     var dangerLevel: DangerLevel?
     var summary: String?
+    var latitude: Double?
+    var longitude: Double?
+    var lastEditedBy: String?
+    var lastEditedAt: Date?
 }
 
 enum TrailWaypointType: String, Codable, Hashable {
@@ -228,14 +232,14 @@ struct ImportedTrailSourceInfo: Codable, Hashable {
 }
 
 struct ImportedTrailData: Codable, Hashable {
-    let name: String
-    let totalDistanceMiles: Double
-    let totalElevationGainFeet: Int
-    let coordinates: [TrailCoordinate]
-    let waypoints: [TrailWaypoint]
-    let waterSources: [WaterSource]
-    let campsites: [Campsite]
-    let source: ImportedTrailSourceInfo
+    var name: String
+    var totalDistanceMiles: Double
+    var totalElevationGainFeet: Int
+    var coordinates: [TrailCoordinate]
+    var waypoints: [TrailWaypoint]
+    var waterSources: [WaterSource]
+    var campsites: [Campsite]
+    var source: ImportedTrailSourceInfo
 }
 
 struct TrailImportPreview: Identifiable, Hashable {
@@ -362,11 +366,6 @@ private struct GPXTrackPoint: Hashable {
 
 private func trailDistanceLabel(distanceMiles: Double, gainFeet: Int) -> String {
     "\(String(format: "%.1f", distanceMiles)) miles • \(gainFeet.formatted()) ft elevation gain"
-}
-
-private func shouldApplyTimberlineOverlay(fileName: String, trailName: String) -> Bool {
-    let haystack = "\(fileName) \(trailName)".lowercased()
-    return haystack.contains("timberline")
 }
 
 private func decodeCDATA(_ value: String) -> String {
@@ -587,7 +586,9 @@ func importedTrailDataFromGPX(xml: String, fileName: String) throws -> ImportedT
             distanceFromStart: roundValue(cumulative[index], decimals: 2),
             type: classifyGPXWaypoint(name: waypoint.name, description: waypoint.description),
             dangerLevel: nil,
-            summary: waypoint.description.isEmpty ? nil : waypoint.description
+            summary: waypoint.description.isEmpty ? nil : waypoint.description,
+            latitude: waypoint.latitude,
+            longitude: waypoint.longitude
         )
         )
         waypointCoordinatesByID[id] = (waypoint.latitude, waypoint.longitude)
@@ -596,61 +597,6 @@ func importedTrailDataFromGPX(xml: String, fileName: String) throws -> ImportedT
 
     let coordinates = trackPoints.map {
         TrailCoordinate(latitude: roundValue($0.latitude, decimals: 6), longitude: roundValue($0.longitude, decimals: 6))
-    }
-
-    if shouldApplyTimberlineOverlay(fileName: fileName, trailName: trailName) {
-        let adjustedWaypoints = timberlineTrailWaypoints.map { waypoint in
-            guard let coordinate = coordinateForKnownWaypoint(waypoint.id) else { return waypoint }
-            let index = nearestTrackIndex(latitude: coordinate.latitude, longitude: coordinate.longitude, trackPoints: trackPoints)
-            var copy = waypoint
-            copy.distanceFromStart = waypoint.id == "timberline-lodge" ? 0 : roundValue(cumulative[index], decimals: 2)
-            return copy
-        }.sorted { $0.distanceFromStart < $1.distanceFromStart }
-
-        let adjustedWater = timberlineWaterSources.map { source in
-            let index = nearestTrackIndex(latitude: source.latitude, longitude: source.longitude, trackPoints: trackPoints)
-            return WaterSource(
-                id: source.id,
-                name: source.name,
-                latitude: source.latitude,
-                longitude: source.longitude,
-                status: source.status,
-                seasonalNote: source.seasonalNote,
-                distanceFromStart: roundValue(cumulative[index], decimals: 2)
-            )
-        }.sorted { $0.distanceFromStart < $1.distanceFromStart }
-
-        let adjustedCamps = timberlineCampsites.map { campsite in
-            let index = nearestTrackIndex(latitude: campsite.latitude, longitude: campsite.longitude, trackPoints: trackPoints)
-            return Campsite(
-                id: campsite.id,
-                name: campsite.name,
-                latitude: campsite.latitude,
-                longitude: campsite.longitude,
-                elevationFeet: metersToFeet(trackPoints[index].elevation),
-                distanceFromStart: roundValue(cumulative[index], decimals: 2),
-                waterProximity: campsite.waterProximity,
-                hasBearBox: campsite.hasBearBox,
-                permitNotes: campsite.permitNotes,
-                sites: campsite.sites
-            )
-        }.sorted { $0.distanceFromStart < $1.distanceFromStart }
-
-        return ImportedTrailData(
-            name: trailName.isEmpty ? "Timberline Trail" : trailName,
-            totalDistanceMiles: totalDistance,
-            totalElevationGainFeet: metersToFeet(elevationGainMeters),
-            coordinates: coordinates,
-            waypoints: adjustedWaypoints,
-            waterSources: adjustedWater,
-            campsites: adjustedCamps,
-            source: ImportedTrailSourceInfo(
-                format: "gpx",
-                fileName: fileName,
-                generatedAt: Date(),
-                overlayApplied: "timberline-curated"
-            )
-        )
     }
 
     let waterSources = rawWaypoints
@@ -710,35 +656,6 @@ func importedTrailPreview(from data: ImportedTrailData) -> TrailImportPreview {
         campsiteCount: data.campsites.count,
         overlayApplied: data.source.overlayApplied
     )
-}
-
-private func coordinateForKnownWaypoint(_ id: String) -> CLLocationCoordinate2D? {
-    switch id {
-    case "timberline-lodge", "timberline-lodge-end":
-        return CLLocationCoordinate2D(latitude: 45.331309, longitude: -121.711307)
-    case "paradise-park-camp":
-        return CLLocationCoordinate2D(latitude: 45.3415, longitude: -121.7335)
-    case "sandy-river-crossing":
-        return CLLocationCoordinate2D(latitude: 45.3649, longitude: -121.7562)
-    case "ramona-falls":
-        return CLLocationCoordinate2D(latitude: 45.380668, longitude: -121.777267)
-    case "muddy-fork-crossing":
-        return CLLocationCoordinate2D(latitude: 45.4022, longitude: -121.7890)
-    case "cairn-basin":
-        return CLLocationCoordinate2D(latitude: 45.4040, longitude: -121.72314)
-    case "elk-cove":
-        return CLLocationCoordinate2D(latitude: 45.40992, longitude: -121.6983)
-    case "cloud-cap":
-        return CLLocationCoordinate2D(latitude: 45.40261, longitude: -121.65539)
-    case "eliot-branch-crossing":
-        return CLLocationCoordinate2D(latitude: 45.3981, longitude: -121.6688)
-    case "cooper-spur-junction":
-        return CLLocationCoordinate2D(latitude: 45.3898, longitude: -121.6764)
-    case "umbrella-falls":
-        return CLLocationCoordinate2D(latitude: 45.3548, longitude: -121.6533)
-    default:
-        return nil
-    }
 }
 
 func daysUntil(_ isoDate: String?, now: Date = Date()) -> Int {
@@ -1669,6 +1586,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
 
 struct TrailMapView: UIViewRepresentable {
     let route: [TrailCoordinate]
+    let waypoints: [TrailWaypoint]
     let userLocation: CLLocation?
     let mapType: MapType
 
@@ -1692,10 +1610,22 @@ struct TrailMapView: UIViewRepresentable {
     private func configure(_ mapView: MKMapView) {
         mapView.mapType = mkMapType(from: mapType)
         mapView.removeOverlays(mapView.overlays)
+        mapView.removeAnnotations(mapView.annotations.filter { !($0 is MKUserLocation) })
 
         let points = route.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
-        let polyline = MKPolyline(coordinates: points, count: points.count)
-        mapView.addOverlay(polyline)
+        if !points.isEmpty {
+            let polyline = MKPolyline(coordinates: points, count: points.count)
+            mapView.addOverlay(polyline)
+        }
+
+        for waypoint in waypoints {
+            guard let latitude = waypoint.latitude, let longitude = waypoint.longitude else { continue }
+            let annotation = MKPointAnnotation()
+            annotation.coordinate = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+            annotation.title = waypoint.name
+            annotation.subtitle = "Mile \(String(format: "%.1f", waypoint.distanceFromStart))"
+            mapView.addAnnotation(annotation)
+        }
 
         if let userLocation = userLocation {
             let region = MKCoordinateRegion(
@@ -2027,12 +1957,16 @@ private struct PremiumGateView: View {
 private struct MapHomeView: View {
     @ObservedObject var store: AppStore
     @StateObject private var locationTracker = LocationTracker()
+    @State private var editingWaypoint: TrailWaypoint?
+    @State private var showingAddWaypoint = false
+    @State private var trailEditError: String?
 
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
                 TrailMapView(
                     route: store.activeTrailCoordinates,
+                    waypoints: store.activeTrailWaypoints,
                     userLocation: locationTracker.latestLocation,
                     mapType: store.settings.mapType
                 )
@@ -2043,6 +1977,11 @@ private struct MapHomeView: View {
                         StatRow(label: "Route", value: store.activeTrailName)
                         StatRow(label: "Distance", value: String(format: "%.1f mi", store.activeTrailDistanceMiles))
                         StatRow(label: "Elevation Gain", value: "\(store.activeTrailElevationGainFeet.formatted()) ft")
+                        if store.importedTrailData == nil {
+                            Text("Import a GPX trail in Settings to enable waypoint mapping and edits.")
+                                .font(.footnote)
+                                .foregroundColor(.orange)
+                        }
                     }
 
                     Section("Location") {
@@ -2118,14 +2057,127 @@ private struct MapHomeView: View {
                     Section("Phase 1 Status") {
                         Text("Auth, onboarding, trips, settings, and base map/location are wired.")
                     }
+
+                    if store.importedTrailData != nil {
+                        Section("Waypoints") {
+                            if let trailEditError {
+                                Text(trailEditError)
+                                    .font(.footnote)
+                                    .foregroundColor(.red)
+                            }
+
+                            Button("Add Waypoint At Current Location") {
+                                showingAddWaypoint = true
+                            }
+                            .disabled(!canAddWaypoint)
+
+                            if !canAddWaypoint {
+                                Text(addWaypointBlockedReason())
+                                    .font(.footnote)
+                                    .foregroundColor(.secondary)
+                            }
+
+                            ForEach(sortedWaypointsWithSegmentDistance(), id: \.waypoint.id) { item in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack {
+                                        Text(item.waypoint.name)
+                                            .font(.subheadline.bold())
+                                        Spacer()
+                                        Text(item.waypoint.type.rawValue.capitalized)
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Text(
+                                        "From start: \(String(format: "%.1f", item.waypoint.distanceFromStart)) mi • " +
+                                        "To next: \(item.segmentToNextMiles.map { String(format: "%.1f mi", $0) } ?? "End")"
+                                    )
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+
+                                    if let by = item.waypoint.lastEditedBy, let at = item.waypoint.lastEditedAt {
+                                        Text("Last edited by \(by) at \(at.formatted(date: .abbreviated, time: .shortened))")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+
+                                    Button("Edit At Current Location") {
+                                        editingWaypoint = item.waypoint
+                                    }
+                                    .disabled(!canEditWaypoint(item.waypoint))
+                                }
+                                .padding(.vertical, 2)
+                            }
+                        }
+                    }
                 }
                 .listStyle(.insetGrouped)
             }
             .navigationTitle("Home")
             .navigationBarTitleDisplayMode(.large)
             .navigationBarItems(trailing: ProfileAvatarButton(store: store))
+            .sheet(item: $editingWaypoint) { waypoint in
+                WaypointEditorSheet(
+                    mode: .edit(waypoint),
+                    store: store,
+                    locationTracker: locationTracker
+                ) { message in
+                    trailEditError = message
+                }
+            }
+            .sheet(isPresented: $showingAddWaypoint) {
+                WaypointEditorSheet(
+                    mode: .add,
+                    store: store,
+                    locationTracker: locationTracker
+                ) { message in
+                    trailEditError = message
+                }
+            }
         }
         .navigationViewStyle(.stack)
+    }
+
+    private var canAddWaypoint: Bool {
+        guard store.canEditWaypoints(), let location = locationTracker.latestLocation else { return false }
+        return distanceToTrailMeters(from: location.coordinate) <= 120
+    }
+
+    private func addWaypointBlockedReason() -> String {
+        if store.session == nil { return "Sign in to add waypoints." }
+        if store.importedTrailData == nil { return "Import a GPX trail first." }
+        guard let location = locationTracker.latestLocation else { return "GPS location is required." }
+        let distance = distanceToTrailMeters(from: location.coordinate)
+        if distance > 120 { return "Move closer to the trail to add a waypoint (\(Int(distance.rounded()))m away)." }
+        return ""
+    }
+
+    private func canEditWaypoint(_ waypoint: TrailWaypoint) -> Bool {
+        guard store.canEditWaypoints(),
+              let location = locationTracker.latestLocation,
+              let latitude = waypoint.latitude,
+              let longitude = waypoint.longitude else { return false }
+        let meters = CLLocation(latitude: latitude, longitude: longitude)
+            .distance(from: CLLocation(latitude: location.coordinate.latitude, longitude: location.coordinate.longitude))
+        return meters <= 100
+    }
+
+    private func sortedWaypointsWithSegmentDistance() -> [(waypoint: TrailWaypoint, segmentToNextMiles: Double?)] {
+        let waypoints = store.activeTrailWaypoints.sorted { $0.distanceFromStart < $1.distanceFromStart }
+        return waypoints.enumerated().map { index, waypoint in
+            let nextDistance = index + 1 < waypoints.count ? waypoints[index + 1].distanceFromStart : nil
+            let segment = nextDistance.map { max(0, $0 - waypoint.distanceFromStart) }
+            return (waypoint: waypoint, segmentToNextMiles: segment)
+        }
+    }
+
+    private func distanceToTrailMeters(from coordinate: CLLocationCoordinate2D) -> Double {
+        let route = store.activeTrailCoordinates
+        guard !route.isEmpty else { return .greatestFiniteMagnitude }
+        let current = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
+        return route.reduce(Double.greatestFiniteMagnitude) { best, point in
+            let distance = current.distance(from: CLLocation(latitude: point.latitude, longitude: point.longitude))
+            return min(best, distance)
+        }
     }
 
     private func locationStatusLabel(_ status: CLAuthorizationStatus) -> String {
@@ -2140,6 +2192,167 @@ private struct MapHomeView: View {
             return "Denied"
         @unknown default:
             return "Unknown"
+        }
+    }
+}
+
+private struct WaypointEditorSheet: View {
+    enum Mode {
+        case edit(TrailWaypoint)
+        case add
+    }
+
+    let mode: Mode
+    @ObservedObject var store: AppStore
+    @ObservedObject var locationTracker: LocationTracker
+    let onResult: (String?) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var name = ""
+    @State private var summary = ""
+    @State private var type: TrailWaypointType = .waypoint
+    @State private var dangerLevel: DangerLevel?
+    @State private var errorMessage: String?
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section("Waypoint") {
+                    TextField("Name", text: $name)
+                    Picker("Type", selection: $type) {
+                        ForEach([
+                            TrailWaypointType.trailhead, .campsite, .water, .viewpoint, .junction, .crossing, .shelter, .waypoint
+                        ], id: \.self) { item in
+                            Text(item.rawValue.capitalized).tag(item)
+                        }
+                    }
+                    Picker("Danger Level", selection: Binding(
+                        get: { dangerLevel ?? .low },
+                        set: { dangerLevel = $0 }
+                    )) {
+                        Text("Low").tag(DangerLevel.low)
+                        Text("Medium").tag(DangerLevel.medium)
+                        Text("High").tag(DangerLevel.high)
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Notes / Details")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        TextEditor(text: $summary)
+                            .frame(minHeight: 100)
+                    }
+                }
+
+                if let errorMessage {
+                    Section {
+                        Text(errorMessage)
+                            .font(.footnote)
+                            .foregroundColor(.red)
+                    }
+                }
+            }
+            .navigationTitle(modeTitle)
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarItems(
+                leading: Button("Cancel") { dismiss() },
+                trailing: Button(modeActionTitle) { save() }
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            )
+            .onAppear(perform: populate)
+        }
+    }
+
+    private var modeTitle: String {
+        switch mode {
+        case .edit: return "Edit Waypoint"
+        case .add: return "Add Waypoint"
+        }
+    }
+
+    private var modeActionTitle: String {
+        switch mode {
+        case .edit: return "Save"
+        case .add: return "Add"
+        }
+    }
+
+    private func populate() {
+        switch mode {
+        case .edit(let waypoint):
+            name = waypoint.name
+            summary = waypoint.summary ?? ""
+            type = waypoint.type
+            dangerLevel = waypoint.dangerLevel
+        case .add:
+            name = ""
+            summary = ""
+            type = .waypoint
+            dangerLevel = nil
+        }
+    }
+
+    private func save() {
+        do {
+            let editorName = store.profile?.name ?? store.session?.email ?? "Unknown"
+            switch mode {
+            case .edit(let waypoint):
+                guard let current = locationTracker.latestLocation,
+                      let lat = waypoint.latitude,
+                      let lon = waypoint.longitude else {
+                    throw NSError(domain: "TrailImport", code: 30, userInfo: [NSLocalizedDescriptionKey: "Current GPS location is required to edit this waypoint."])
+                }
+                let meters = CLLocation(latitude: lat, longitude: lon)
+                    .distance(from: CLLocation(latitude: current.coordinate.latitude, longitude: current.coordinate.longitude))
+                guard meters <= 100 else {
+                    throw NSError(domain: "TrailImport", code: 31, userInfo: [NSLocalizedDescriptionKey: "Move within 100m of this waypoint to edit it."])
+                }
+
+                try store.updateWaypoint(
+                    id: waypoint.id,
+                    name: name,
+                    type: type,
+                    dangerLevel: dangerLevel,
+                    summary: summary,
+                    editorName: editorName
+                )
+            case .add:
+                guard let current = locationTracker.latestLocation else {
+                    throw NSError(domain: "TrailImport", code: 32, userInfo: [NSLocalizedDescriptionKey: "Current GPS location is required to add a waypoint."])
+                }
+                let distance = distanceToTrailMeters(
+                    from: current.coordinate,
+                    route: store.activeTrailCoordinates
+                )
+                guard distance <= 120 else {
+                    throw NSError(domain: "TrailImport", code: 33, userInfo: [NSLocalizedDescriptionKey: "Move closer to the trail to add a waypoint."])
+                }
+
+                try store.addWaypointAtCurrentLocation(
+                    name: name,
+                    type: type,
+                    dangerLevel: dangerLevel,
+                    summary: summary,
+                    latitude: current.coordinate.latitude,
+                    longitude: current.coordinate.longitude,
+                    editorName: editorName
+                )
+            }
+
+            onResult(nil)
+            dismiss()
+        } catch {
+            let message = (error as NSError).localizedDescription
+            errorMessage = message
+            onResult(message)
+        }
+    }
+
+    private func distanceToTrailMeters(from coordinate: CLLocationCoordinate2D, route: [TrailCoordinate]) -> Double {
+        guard !route.isEmpty else { return .greatestFiniteMagnitude }
+        let current = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
+        return route.reduce(Double.greatestFiniteMagnitude) { best, point in
+            let dist = current.distance(from: CLLocation(latitude: point.latitude, longitude: point.longitude))
+            return min(best, dist)
         }
     }
 }
@@ -3219,7 +3432,7 @@ private struct SettingsView: View {
                     if let imported = store.importedTrailData {
                         StatRow(label: "Imported File", value: imported.source.fileName)
                         StatRow(label: "Imported At", value: imported.source.generatedAt.formatted(date: .abbreviated, time: .shortened))
-                        StatRow(label: "Overlay", value: imported.source.overlayApplied == "timberline-curated" ? "Timberline curated metadata" : "Raw GPX-derived")
+                        StatRow(label: "Source", value: "Raw GPX-derived")
                     }
                     StatRow(label: "Distance / Gain", value: trailDistanceLabel(distanceMiles: store.activeTrailDistanceMiles, gainFeet: store.activeTrailElevationGainFeet))
 
@@ -3241,7 +3454,7 @@ private struct SettingsView: View {
                             Text("\(preview.trackPointCount.formatted()) track points • \(preview.waypointCount) waypoints • \(preview.waterSourceCount) water • \(preview.campsiteCount) camps")
                                 .font(.footnote)
                                 .foregroundColor(.secondary)
-                            Text(preview.overlayApplied == "timberline-curated" ? "Timberline curated metadata will be applied." : "Metadata will be derived from the GPX.")
+                            Text("Metadata will be derived from the GPX.")
                                 .font(.footnote)
                                 .foregroundColor(.secondary)
 
@@ -3267,7 +3480,7 @@ private struct SettingsView: View {
                     }
 
                     if store.importedTrailData != nil {
-                        Button("Use Bundled Trail", role: .destructive) {
+                        Button("Remove Imported Trail", role: .destructive) {
                             pendingImportPreview = nil
                             pendingImportURL = nil
                             store.resetImportedTrail()
