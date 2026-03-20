@@ -3215,13 +3215,13 @@ private struct SettingsView: View {
                 }
 
                 Section("Trail Data") {
-                    LabeledContent("Active Source", value: store.activeTrailSourceLabel)
+                    StatRow(label: "Active Source", value: store.activeTrailSourceLabel)
                     if let imported = store.importedTrailData {
-                        LabeledContent("Imported File", value: imported.source.fileName)
-                        LabeledContent("Imported At", value: imported.source.generatedAt.formatted(date: .abbreviated, time: .shortened))
-                        LabeledContent("Overlay", value: imported.source.overlayApplied == "timberline-curated" ? "Timberline curated metadata" : "Raw GPX-derived")
+                        StatRow(label: "Imported File", value: imported.source.fileName)
+                        StatRow(label: "Imported At", value: imported.source.generatedAt.formatted(date: .abbreviated, time: .shortened))
+                        StatRow(label: "Overlay", value: imported.source.overlayApplied == "timberline-curated" ? "Timberline curated metadata" : "Raw GPX-derived")
                     }
-                    LabeledContent("Distance / Gain", value: trailDistanceLabel(distanceMiles: store.activeTrailDistanceMiles, gainFeet: store.activeTrailElevationGainFeet))
+                    StatRow(label: "Distance / Gain", value: trailDistanceLabel(distanceMiles: store.activeTrailDistanceMiles, gainFeet: store.activeTrailElevationGainFeet))
 
                     Button("Choose GPX File") {
                         importErrorMessage = nil
