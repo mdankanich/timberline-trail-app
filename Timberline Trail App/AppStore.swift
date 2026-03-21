@@ -170,16 +170,24 @@ final class AppStore: ObservableObject {
 
     func signOut() {
         authService.signOut()
-        session = nil
-        profile = nil
-        safetyKeyNumbers = SafetyContent.fallback.keyNumbers
-        trips = []
-        activeTripID = nil
-        backgroundedAt = nil
+        clearSessionAndLocalData()
+    }
+
+    func deleteAccount() async {
+        guard !isAuthLoading else { return }
+        authError = nil
         authInfoMessage = nil
-        userService.clearLocalProfile()
-        tripService.clearLocalTrips()
-        refreshFlowState()
+        isAuthLoading = true
+        defer { isAuthLoading = false }
+
+        do {
+            try await tripService.deleteRemoteTrips()
+            try await userService.deleteRemoteProfile()
+            try await authService.deleteCurrentUser()
+            clearSessionAndLocalData()
+        } catch {
+            authError = mapAuthError(error, fallback: "Unable to delete account. Please sign in again and retry.")
+        }
     }
 
     func requestPasswordReset(email: String) async {
@@ -558,6 +566,23 @@ final class AppStore: ObservableObject {
 
     private func refreshFlowState() {
         flowState = deriveAppFlowState(session: session, profile: profile)
+    }
+
+    private func clearSessionAndLocalData() {
+        session = nil
+        profile = nil
+        safetyKeyNumbers = SafetyContent.fallback.keyNumbers
+        trips = []
+        activeTripID = nil
+        backgroundedAt = nil
+        authInfoMessage = nil
+        currentNonce = nil
+        importedTrailData = nil
+        userService.clearLocalProfile()
+        tripService.clearLocalTrips()
+        defaults.removeObject(forKey: AppPersistenceKeys.importedTrail)
+        Self.removePersistedImportedTrail(fileManager: fileManager)
+        refreshFlowState()
     }
 
     private func formatYMD(_ date: Date) -> String {
