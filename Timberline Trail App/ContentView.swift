@@ -1997,137 +1997,10 @@ private struct MapHomeView: View {
                 .frame(height: 300)
 
                 List {
-                    Section("Trail") {
-                        StatRow(label: "Route", value: store.activeTrailName)
-                        StatRow(label: "Distance", value: String(format: "%.1f mi", store.activeTrailDistanceMiles))
-                        StatRow(label: "Elevation Gain", value: "\(store.activeTrailElevationGainFeet.formatted()) ft")
-                        if store.importedTrailData == nil {
-                            Text("Import a GPX trail in Settings to enable waypoint mapping and edits.")
-                                .font(.footnote)
-                                .foregroundColor(.orange)
-                        }
-
-                        if store.importedTrailData != nil {
-                            Button("Add Waypoint At Current Location") {
-                                showingAddWaypoint = true
-                            }
-                            .disabled(!canAddWaypoint)
-
-                            if !canAddWaypoint {
-                                Text(addWaypointBlockedReason())
-                                    .font(.footnote)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                    }
-
-                    Section("Location") {
-                        if let location = locationTracker.latestLocation {
-                            StatRow(label: "Lat", value: String(format: "%.4f", location.coordinate.latitude))
-                            StatRow(label: "Lon", value: String(format: "%.4f", location.coordinate.longitude))
-                        } else {
-                            Text("No GPS fix yet.")
-                                .foregroundColor(.secondary)
-                        }
-
-                        HStack {
-                            Button(locationTracker.isTracking ? "Stop Tracking" : "Start Tracking") {
-                                if locationTracker.isTracking {
-                                    locationTracker.stopTracking()
-                                } else {
-                                    locationTracker.startTracking()
-                                }
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(
-                                !locationTracker.isTracking &&
-                                (locationTracker.authorizationStatus == .denied || locationTracker.authorizationStatus == .restricted)
-                            )
-                        }
-
-                        StatRow(label: "Saved Sessions", value: "\(locationTracker.sessions.count)")
-                        StatRow(label: "Saved Points", value: "\(locationTracker.totalTrackedPoints)")
-                        StatRow(label: "Tracked Distance", value: String(format: "%.2f mi", locationTracker.totalTrackedDistanceMiles))
-
-                        if !locationTracker.sessions.isEmpty {
-                            Button("Clear Session Logs", role: .destructive) {
-                                locationTracker.clearSessionLogs()
-                            }
-                            .buttonStyle(.bordered)
-                        }
-                    }
-
-                    if !locationTracker.sessions.isEmpty {
-                        Section("Recent Tracks") {
-                            ForEach(locationTracker.sessions.prefix(3)) { session in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(session.startedAt.formatted(date: .abbreviated, time: .shortened))
-                                        .font(.subheadline.bold())
-                                    Text(
-                                        "\(session.points.count) pts • " +
-                                        "\(String(format: "%.2f", locationTracker.distanceMiles(for: session))) mi • " +
-                                        formatDuration(locationTracker.duration(for: session))
-                                    )
-                                    .font(.footnote)
-                                    .foregroundColor(.secondary)
-                                }
-                                .padding(.vertical, 2)
-                            }
-                        }
-                    }
-
-                    if store.importedTrailData != nil {
-                        Section("Waypoints") {
-                            if let trailEditError = trailEditError {
-                                Text(trailEditError)
-                                    .font(.footnote)
-                                    .foregroundColor(.red)
-                            }
-
-                            HStack {
-                                Button("Clockwise") {
-                                    waypointDirection = .clockwise
-                                }
-                                .buttonStyle(waypointDirection == .clockwise ? .borderedProminent : .bordered)
-
-                                Button("Counterclockwise") {
-                                    waypointDirection = .counterclockwise
-                                }
-                                .buttonStyle(waypointDirection == .counterclockwise ? .borderedProminent : .bordered)
-                            }
-
-                            ForEach(sortedWaypointsWithSegmentDistance(), id: \.waypoint.id) { item in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    HStack {
-                                        Text(item.waypoint.name)
-                                            .font(.subheadline.bold())
-                                        Spacer()
-                                        Text(item.waypoint.type.rawValue.capitalized)
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    Text(
-                                        "From start: \(String(format: "%.1f", item.waypoint.distanceFromStart)) mi • " +
-                                        "To next: \(item.segmentToNextMiles.map { String(format: "%.1f mi", $0) } ?? "End")"
-                                    )
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-
-                                    if let by = item.waypoint.lastEditedBy, let at = item.waypoint.lastEditedAt {
-                                        Text("Last edited by \(by) at \(at.formatted(date: .abbreviated, time: .shortened))")
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                    }
-
-                                    Button("Edit At Current Location") {
-                                        editingWaypoint = item.waypoint
-                                    }
-                                    .disabled(!canEditWaypoint(item.waypoint))
-                                }
-                                .padding(.vertical, 2)
-                            }
-                        }
-                    }
+                    trailSection
+                    locationSection
+                    recentTracksSection
+                    waypointsSection
                 }
                 .listStyle(.insetGrouped)
             }
@@ -2154,6 +2027,148 @@ private struct MapHomeView: View {
             }
         }
         .navigationViewStyle(.stack)
+    }
+
+    private var trailSection: some View {
+        Section("Trail") {
+            StatRow(label: "Route", value: store.activeTrailName)
+            StatRow(label: "Distance", value: String(format: "%.1f mi", store.activeTrailDistanceMiles))
+            StatRow(label: "Elevation Gain", value: "\(store.activeTrailElevationGainFeet.formatted()) ft")
+            if store.importedTrailData == nil {
+                Text("Import a GPX trail in Settings to enable waypoint mapping and edits.")
+                    .font(.footnote)
+                    .foregroundColor(.orange)
+            }
+
+            if store.importedTrailData != nil {
+                Button("Add Waypoint At Current Location") {
+                    showingAddWaypoint = true
+                }
+                .disabled(!canAddWaypoint)
+
+                if !canAddWaypoint {
+                    Text(addWaypointBlockedReason())
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+    }
+
+    private var locationSection: some View {
+        Section("Location") {
+            if let location = locationTracker.latestLocation {
+                StatRow(label: "Lat", value: String(format: "%.4f", location.coordinate.latitude))
+                StatRow(label: "Lon", value: String(format: "%.4f", location.coordinate.longitude))
+            } else {
+                Text("No GPS fix yet.")
+                    .foregroundColor(.secondary)
+            }
+
+            HStack {
+                Button(locationTracker.isTracking ? "Stop Tracking" : "Start Tracking") {
+                    if locationTracker.isTracking {
+                        locationTracker.stopTracking()
+                    } else {
+                        locationTracker.startTracking()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(
+                    !locationTracker.isTracking &&
+                    (locationTracker.authorizationStatus == .denied || locationTracker.authorizationStatus == .restricted)
+                )
+            }
+
+            StatRow(label: "Saved Sessions", value: "\(locationTracker.sessions.count)")
+            StatRow(label: "Saved Points", value: "\(locationTracker.totalTrackedPoints)")
+            StatRow(label: "Tracked Distance", value: String(format: "%.2f mi", locationTracker.totalTrackedDistanceMiles))
+
+            if !locationTracker.sessions.isEmpty {
+                Button("Clear Session Logs", role: .destructive) {
+                    locationTracker.clearSessionLogs()
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var recentTracksSection: some View {
+        if !locationTracker.sessions.isEmpty {
+            Section("Recent Tracks") {
+                ForEach(locationTracker.sessions.prefix(3)) { session in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(session.startedAt.formatted(date: .abbreviated, time: .shortened))
+                            .font(.subheadline.bold())
+                        Text(
+                            "\(session.points.count) pts • " +
+                            "\(String(format: "%.2f", locationTracker.distanceMiles(for: session))) mi • " +
+                            formatDuration(locationTracker.duration(for: session))
+                        )
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var waypointsSection: some View {
+        if store.importedTrailData != nil {
+            Section("Waypoints") {
+                if let trailEditError = trailEditError {
+                    Text(trailEditError)
+                        .font(.footnote)
+                        .foregroundColor(.red)
+                }
+
+                HStack {
+                    Button("Clockwise") {
+                        waypointDirection = .clockwise
+                    }
+                    .buttonStyle(waypointDirection == .clockwise ? .borderedProminent : .bordered)
+
+                    Button("Counterclockwise") {
+                        waypointDirection = .counterclockwise
+                    }
+                    .buttonStyle(waypointDirection == .counterclockwise ? .borderedProminent : .bordered)
+                }
+
+                ForEach(sortedWaypointsWithSegmentDistance(), id: \.waypoint.id) { item in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(item.waypoint.name)
+                                .font(.subheadline.bold())
+                            Spacer()
+                            Text(item.waypoint.type.rawValue.capitalized)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        Text(
+                            "From start: \(String(format: "%.1f", item.waypoint.distanceFromStart)) mi • " +
+                            "To next: \(item.segmentToNextMiles.map { String(format: "%.1f mi", $0) } ?? "End")"
+                        )
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                        if let by = item.waypoint.lastEditedBy, let at = item.waypoint.lastEditedAt {
+                            Text("Last edited by \(by) at \(at.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+
+                        Button("Edit At Current Location") {
+                            editingWaypoint = item.waypoint
+                        }
+                        .disabled(!canEditWaypoint(item.waypoint))
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+        }
     }
 
     private var canAddWaypoint: Bool {
