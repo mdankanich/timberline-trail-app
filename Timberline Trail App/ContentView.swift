@@ -1973,11 +1973,17 @@ private struct PremiumGateView: View {
 }
 
 private struct MapHomeView: View {
+    private enum WaypointDirection {
+        case clockwise
+        case counterclockwise
+    }
+
     @ObservedObject var store: AppStore
     @StateObject private var locationTracker = LocationTracker()
     @State private var editingWaypoint: TrailWaypoint?
     @State private var showingAddWaypoint = false
     @State private var trailEditError: String?
+    @State private var waypointDirection: WaypointDirection = .clockwise
 
     var body: some View {
         NavigationView {
@@ -2000,10 +2006,22 @@ private struct MapHomeView: View {
                                 .font(.footnote)
                                 .foregroundColor(.orange)
                         }
+
+                        if store.importedTrailData != nil {
+                            Button("Add Waypoint At Current Location") {
+                                showingAddWaypoint = true
+                            }
+                            .disabled(!canAddWaypoint)
+
+                            if !canAddWaypoint {
+                                Text(addWaypointBlockedReason())
+                                    .font(.footnote)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
                     }
 
                     Section("Location") {
-                        StatRow(label: "Permission", value: locationStatusLabel(locationTracker.authorizationStatus))
                         if let location = locationTracker.latestLocation {
                             StatRow(label: "Lat", value: String(format: "%.4f", location.coordinate.latitude))
                             StatRow(label: "Lon", value: String(format: "%.4f", location.coordinate.longitude))
@@ -2025,21 +2043,6 @@ private struct MapHomeView: View {
                                 !locationTracker.isTracking &&
                                 (locationTracker.authorizationStatus == .denied || locationTracker.authorizationStatus == .restricted)
                             )
-
-                            if locationTracker.authorizationStatus == .notDetermined {
-                                Button("Allow Location") {
-                                    locationTracker.requestPermission()
-                                }
-                                .buttonStyle(.bordered)
-                            } else if locationTracker.authorizationStatus == .denied || locationTracker.authorizationStatus == .restricted {
-                                Button("Open Settings") {
-                                    #if canImport(UIKit)
-                                    guard let settingsURL = URL(string: UIApplication.openSettingsURLString) else { return }
-                                    UIApplication.shared.open(settingsURL)
-                                    #endif
-                                }
-                                .buttonStyle(.bordered)
-                            }
                         }
 
                         StatRow(label: "Saved Sessions", value: "\(locationTracker.sessions.count)")
@@ -2073,21 +2076,6 @@ private struct MapHomeView: View {
                         }
                     }
 
-                    Section("Active Trip") {
-                        if let trip = store.activeTrip {
-                            StatRow(label: "Trip", value: trip.name)
-                            StatRow(label: "Dates", value: formatDateRange(start: trip.startDate, end: trip.endDate))
-                            StatRow(label: "Days Until Start", value: "\(daysUntil(trip.startDate))")
-                            StatRow(label: "Duration", value: "\(tripDurationDays(start: trip.startDate, end: trip.endDate)) days")
-                        } else {
-                            Text("No active trip yet.")
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    Section("Phase 1 Status") {
-                        Text("Auth, onboarding, trips, settings, and base map/location are wired.")
-                    }
-
                     if store.importedTrailData != nil {
                         Section("Waypoints") {
                             if let trailEditError = trailEditError {
@@ -2096,15 +2084,16 @@ private struct MapHomeView: View {
                                     .foregroundColor(.red)
                             }
 
-                            Button("Add Waypoint At Current Location") {
-                                showingAddWaypoint = true
-                            }
-                            .disabled(!canAddWaypoint)
+                            HStack {
+                                Button("Clockwise") {
+                                    waypointDirection = .clockwise
+                                }
+                                .buttonStyle(waypointDirection == .clockwise ? .borderedProminent : .bordered)
 
-                            if !canAddWaypoint {
-                                Text(addWaypointBlockedReason())
-                                    .font(.footnote)
-                                    .foregroundColor(.secondary)
+                                Button("Counterclockwise") {
+                                    waypointDirection = .counterclockwise
+                                }
+                                .buttonStyle(waypointDirection == .counterclockwise ? .borderedProminent : .bordered)
                             }
 
                             ForEach(sortedWaypointsWithSegmentDistance(), id: \.waypoint.id) { item in
@@ -2192,10 +2181,16 @@ private struct MapHomeView: View {
     }
 
     private func sortedWaypointsWithSegmentDistance() -> [(waypoint: TrailWaypoint, segmentToNextMiles: Double?)] {
-        let waypoints = store.activeTrailWaypoints.sorted { $0.distanceFromStart < $1.distanceFromStart }
+        let ascending = store.activeTrailWaypoints.sorted { $0.distanceFromStart < $1.distanceFromStart }
+        let waypoints = waypointDirection == .clockwise ? ascending : Array(ascending.reversed())
         return waypoints.enumerated().map { index, waypoint in
-            let nextDistance = index + 1 < waypoints.count ? waypoints[index + 1].distanceFromStart : nil
-            let segment = nextDistance.map { max(0, $0 - waypoint.distanceFromStart) }
+            let nextDistanceFromStart = index + 1 < waypoints.count ? waypoints[index + 1].distanceFromStart : nil
+            let segment = nextDistanceFromStart.map { nextDistance in
+                if waypointDirection == .clockwise {
+                    return max(0, nextDistance - waypoint.distanceFromStart)
+                }
+                return max(0, waypoint.distanceFromStart - nextDistance)
+            }
             return (waypoint: waypoint, segmentToNextMiles: segment)
         }
     }
@@ -2207,21 +2202,6 @@ private struct MapHomeView: View {
         return route.reduce(Double.greatestFiniteMagnitude) { best, point in
             let distance = current.distance(from: CLLocation(latitude: point.latitude, longitude: point.longitude))
             return min(best, distance)
-        }
-    }
-
-    private func locationStatusLabel(_ status: CLAuthorizationStatus) -> String {
-        switch status {
-        case .authorizedAlways, .authorizedWhenInUse:
-            return "Granted"
-        case .notDetermined:
-            return "Not Determined"
-        case .restricted:
-            return "Restricted"
-        case .denied:
-            return "Denied"
-        @unknown default:
-            return "Unknown"
         }
     }
 }
@@ -3449,6 +3429,7 @@ private struct EditTripView: View {
 
 private struct SettingsView: View {
     @ObservedObject var store: AppStore
+    @StateObject private var locationTracker = LocationTracker()
     @State private var isImportingFile = false
     @State private var pendingImportURL: URL?
     @State private var pendingImportPreview: TrailImportPreview?
@@ -3522,6 +3503,27 @@ private struct SettingsView: View {
                         ForEach(MapType.allCases) { mapType in
                             Text(mapType.rawValue.capitalized).tag(mapType)
                         }
+                    }
+                }
+
+                Section("Location Permission") {
+                    StatRow(label: "Status", value: locationStatusLabel(locationTracker.authorizationStatus))
+
+                    if locationTracker.authorizationStatus == .notDetermined {
+                        Button("Allow Location Access") {
+                            locationTracker.requestPermission()
+                        }
+                    } else if locationTracker.authorizationStatus == .denied || locationTracker.authorizationStatus == .restricted {
+                        Button("Open iOS Settings") {
+                            #if canImport(UIKit)
+                            guard let settingsURL = URL(string: UIApplication.openSettingsURLString) else { return }
+                            UIApplication.shared.open(settingsURL)
+                            #endif
+                        }
+                    } else {
+                        Text("Location access is enabled for map and waypoint features.")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
                     }
                 }
 
@@ -3666,6 +3668,21 @@ private struct SettingsView: View {
         let parts = name.split(separator: " ").prefix(2)
         let value = parts.map { String($0.prefix(1)).uppercased() }.joined()
         return value.isEmpty ? "H" : value
+    }
+
+    private func locationStatusLabel(_ status: CLAuthorizationStatus) -> String {
+        switch status {
+        case .authorizedAlways, .authorizedWhenInUse:
+            return "Granted"
+        case .notDetermined:
+            return "Not Determined"
+        case .restricted:
+            return "Restricted"
+        case .denied:
+            return "Denied"
+        @unknown default:
+            return "Unknown"
+        }
     }
 }
 
