@@ -461,7 +461,7 @@ private func extractGPXTrackPoints(xml: String) -> [GPXTrackPoint] {
         let latitude = Double(readXMLAttribute("lat", in: attributes))
         let longitude = Double(readXMLAttribute("lon", in: attributes))
         let elevation = Double(readXMLTag("ele", in: block)) ?? (points.last?.elevation ?? 0)
-        guard let latitude, let longitude else { continue }
+        guard let latitude = latitude, let longitude = longitude else { continue }
         let point = GPXTrackPoint(latitude: latitude, longitude: longitude, elevation: elevation)
         if points.last != point {
             points.append(point)
@@ -554,7 +554,7 @@ func importedTrailDataFromGPX(xml: String, fileName: String) throws -> ImportedT
         throw NSError(domain: "TrailImport", code: 1, userInfo: [NSLocalizedDescriptionKey: "The GPX file does not contain enough track points."])
     }
 
-    let metadataBlock = {
+    let metadataBlock: String = {
         let pattern = #"<metadata>([\s\S]*?)</metadata>"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return "" }
         let range = NSRange(xml.startIndex..<xml.endIndex, in: xml)
@@ -2090,7 +2090,7 @@ private struct MapHomeView: View {
 
                     if store.importedTrailData != nil {
                         Section("Waypoints") {
-                            if let trailEditError {
+                            if let trailEditError = trailEditError {
                                 Text(trailEditError)
                                     .font(.footnote)
                                     .foregroundColor(.red)
@@ -2273,7 +2273,7 @@ private struct WaypointEditorSheet: View {
                     }
                 }
 
-                if let errorMessage {
+                if let errorMessage = errorMessage {
                     Section {
                         Text(errorMessage)
                             .font(.footnote)
