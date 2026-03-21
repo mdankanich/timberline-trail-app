@@ -1454,6 +1454,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     private let sessionsKey = "phase1_tracking_sessions"
     private var activeSession: TrackingSession?
     private var lastTrackedLocation: CLLocation?
+    private var shouldStartAfterAuthorization = false
 
     override init() {
         self.authorizationStatus = manager.authorizationStatus
@@ -1463,6 +1464,10 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         manager.desiredAccuracy = kCLLocationAccuracyBest
         manager.distanceFilter = 10
         loadSessions()
+
+        if authorizationStatus == .authorizedAlways || authorizationStatus == .authorizedWhenInUse {
+            manager.requestLocation()
+        }
     }
 
     func requestPermission() {
@@ -1471,6 +1476,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
 
     func startTracking() {
         if authorizationStatus == .notDetermined {
+            shouldStartAfterAuthorization = true
             requestPermission()
             return
         }
@@ -1496,6 +1502,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     func stopTracking() {
         manager.stopUpdatingLocation()
         isTracking = false
+        shouldStartAfterAuthorization = false
         lastTrackedLocation = nil
 
         guard var completed = activeSession else { return }
@@ -1540,7 +1547,18 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         authorizationStatus = manager.authorizationStatus
         if authorizationStatus == .authorizedAlways || authorizationStatus == .authorizedWhenInUse {
-            startTracking()
+            manager.requestLocation()
+            if shouldStartAfterAuthorization {
+                shouldStartAfterAuthorization = false
+                startTracking()
+            }
+            return
+        }
+
+        shouldStartAfterAuthorization = false
+        if authorizationStatus == .denied || authorizationStatus == .restricted {
+            manager.stopUpdatingLocation()
+            isTracking = false
         }
     }
 
@@ -2003,10 +2021,22 @@ private struct MapHomeView: View {
                                 }
                             }
                             .buttonStyle(.borderedProminent)
+                            .disabled(
+                                !locationTracker.isTracking &&
+                                (locationTracker.authorizationStatus == .denied || locationTracker.authorizationStatus == .restricted)
+                            )
 
                             if locationTracker.authorizationStatus == .notDetermined {
                                 Button("Allow Location") {
                                     locationTracker.requestPermission()
+                                }
+                                .buttonStyle(.bordered)
+                            } else if locationTracker.authorizationStatus == .denied || locationTracker.authorizationStatus == .restricted {
+                                Button("Open Settings") {
+                                    #if canImport(UIKit)
+                                    guard let settingsURL = URL(string: UIApplication.openSettingsURLString) else { return }
+                                    UIApplication.shared.open(settingsURL)
+                                    #endif
                                 }
                                 .buttonStyle(.bordered)
                             }
@@ -2360,54 +2390,113 @@ private struct WaypointEditorSheet: View {
 private struct NavigationDashboardView: View {
     @ObservedObject var store: AppStore
     @StateObject private var locationTracker = LocationTracker()
-    @State private var lastRouteIndex: Int?
+
+    private struct NavigationProgress {
+        let remainingMiles: Double
+        let traveledMiles: Double
+    }
+
+    private struct TrailPositionSnapshot {
+        let latitude: Double
+        let longitude: Double
+        let traveledMiles: Double
+        let offTrailMeters: Double
+    }
+
+    private struct NextWaypointSnapshot {
+        let waypoint: TrailWaypoint
+        let distanceToNextMiles: Double
+    }
 
     var body: some View {
         NavigationView {
-            List {
-                Section("Navigation") {
-                    if locationTracker.authorizationStatus == .notDetermined {
-                        Button("Allow Location") {
-                            locationTracker.requestPermission()
+            VStack(spacing: 0) {
+                TrailMapView(
+                    route: store.activeTrailCoordinates,
+                    waypoints: store.activeTrailWaypoints,
+                    userLocation: locationTracker.latestLocation,
+                    mapType: store.settings.mapType
+                )
+                .frame(height: 300)
+
+                List {
+                    Section("Navigation") {
+                        StatRow(label: "Permission", value: locationStatusLabel(locationTracker.authorizationStatus))
+
+                        if locationTracker.authorizationStatus == .notDetermined {
+                            Button("Allow Location") {
+                                locationTracker.requestPermission()
+                            }
+                            .buttonStyle(.bordered)
+                        } else if locationTracker.authorizationStatus == .denied || locationTracker.authorizationStatus == .restricted {
+                            Button("Open Settings") {
+                                #if canImport(UIKit)
+                                guard let settingsURL = URL(string: UIApplication.openSettingsURLString) else { return }
+                                UIApplication.shared.open(settingsURL)
+                                #endif
+                            }
+                            .buttonStyle(.bordered)
+                        }
+
+                        Button(locationTracker.isTracking ? "Stop Navigation Tracking" : "Start Navigation Tracking") {
+                            if locationTracker.isTracking {
+                                locationTracker.stopTracking()
+                            } else {
+                                locationTracker.startTracking()
+                            }
                         }
                         .buttonStyle(.borderedProminent)
+                        .disabled(
+                            !locationTracker.isTracking &&
+                            (locationTracker.authorizationStatus == .denied || locationTracker.authorizationStatus == .restricted)
+                        )
                     }
 
-                    Button(locationTracker.isTracking ? "Stop Navigation Tracking" : "Start Navigation Tracking") {
-                        if locationTracker.isTracking {
-                            locationTracker.stopTracking()
+                    Section("Trail Position") {
+                        if let snapshot = trailPositionSnapshot {
+                            StatRow(label: "Lat", value: String(format: "%.5f", snapshot.latitude))
+                            StatRow(label: "Lon", value: String(format: "%.5f", snapshot.longitude))
+                            StatRow(label: "Trail Mile", value: String(format: "%.1f mi", snapshot.traveledMiles))
+                            StatRow(label: "Distance Off Trail", value: "\(Int(snapshot.offTrailMeters.rounded())) m")
+                            StatRow(label: "On Trail", value: snapshot.offTrailMeters <= 120 ? "Yes" : "No")
+                            StatRow(label: "Current Segment", value: segmentLabel(for: snapshot.traveledMiles))
                         } else {
-                            locationTracker.startTracking()
+                            Text("Waiting for GPS fix.")
+                                .foregroundColor(.secondary)
                         }
                     }
-                    .buttonStyle(.borderedProminent)
-                }
 
-                Section("Progress") {
-                    let nearest = computedNearestIndex()
-                    let remaining = distanceRemainingMiles(route: store.activeTrailCoordinates, nearestIndex: nearest)
-                    let traveled = max(0, store.activeTrailDistanceMiles - remaining)
-                    StatRow(label: "Current Segment", value: segmentLabel(for: traveled))
-                    StatRow(label: "Distance Remaining", value: String(format: "%.1f mi", remaining))
-                    StatRow(label: "ETA @ 2.0 mph", value: String(format: "%.1f hrs", etaHours(distanceRemainingMiles: remaining)))
-                    if let next = nextWaypoint(distanceFromStartMiles: traveled, waypoints: store.activeTrailWaypoints) {
-                        StatRow(label: "Next Waypoint", value: "\(next.name) (\(String(format: "%.1f", next.distanceFromStart)) mi)")
-                    } else {
-                        StatRow(label: "Next Waypoint", value: "Loop complete")
+                    Section("Next Waypoint") {
+                        if let next = nextWaypointSnapshot {
+                            StatRow(label: "Name", value: next.waypoint.name)
+                            StatRow(label: "Distance To Next", value: String(format: "%.1f mi", next.distanceToNextMiles))
+                            StatRow(label: "ETA @ 2.0 mph", value: String(format: "%.1f hrs", etaHours(distanceRemainingMiles: next.distanceToNextMiles)))
+                        } else {
+                            StatRow(label: "Status", value: "Loop complete")
+                        }
                     }
-                }
 
-                Section("Conditions") {
-                    StatRow(label: "Trail", value: "Open with caution at river crossings")
-                    ForEach(store.activeTrailWaypoints.filter { dangerousCrossingWaypointIDs.contains($0.id) }) { crossing in
-                        if let summary = crossing.summary {
-                            Text("• \(crossing.name): \(summary)")
-                                .font(.footnote)
+                    Section("Progress") {
+                        if let progress = navigationProgress {
+                            StatRow(label: "Distance Remaining", value: String(format: "%.1f mi", progress.remainingMiles))
+                        } else {
+                            Text("Waiting for GPS fix.")
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    Section("Conditions") {
+                        StatRow(label: "Trail", value: "Open with caution at river crossings")
+                        ForEach(store.activeTrailWaypoints.filter { dangerousCrossingWaypointIDs.contains($0.id) }) { crossing in
+                            if let summary = crossing.summary {
+                                Text("• \(crossing.name): \(summary)")
+                                    .font(.footnote)
+                            }
                         }
                     }
                 }
+                .listStyle(.insetGrouped)
             }
-            .listStyle(.insetGrouped)
             .navigationTitle("Navigate")
             .navigationBarTitleDisplayMode(.large)
             .navigationBarItems(trailing: ProfileAvatarButton(store: store))
@@ -2415,16 +2504,42 @@ private struct NavigationDashboardView: View {
         .navigationViewStyle(.stack)
     }
 
-    private func computedNearestIndex() -> Int {
-        guard let location = locationTracker.latestLocation else { return 0 }
-        let index = nearestRouteIndex(
+    private var navigationProgress: NavigationProgress? {
+        guard let location = locationTracker.latestLocation else { return nil }
+        let nearest = nearestIndex(for: location.coordinate)
+        let remaining = distanceRemainingMiles(route: store.activeTrailCoordinates, nearestIndex: nearest)
+        let traveled = max(0, store.activeTrailDistanceMiles - remaining)
+        return NavigationProgress(remainingMiles: remaining, traveledMiles: traveled)
+    }
+
+    private var trailPositionSnapshot: TrailPositionSnapshot? {
+        guard let location = locationTracker.latestLocation else { return nil }
+        guard let progress = navigationProgress else { return nil }
+        let offTrail = distanceToTrailMeters(from: location.coordinate, route: store.activeTrailCoordinates)
+        return TrailPositionSnapshot(
+            latitude: location.coordinate.latitude,
+            longitude: location.coordinate.longitude,
+            traveledMiles: progress.traveledMiles,
+            offTrailMeters: offTrail
+        )
+    }
+
+    private var nextWaypointSnapshot: NextWaypointSnapshot? {
+        guard let progress = navigationProgress else { return nil }
+        guard let next = nextWaypoint(distanceFromStartMiles: progress.traveledMiles, waypoints: store.activeTrailWaypoints) else { return nil }
+        return NextWaypointSnapshot(
+            waypoint: next,
+            distanceToNextMiles: max(0, next.distanceFromStart - progress.traveledMiles)
+        )
+    }
+
+    private func nearestIndex(for coordinate: CLLocationCoordinate2D) -> Int {
+        nearestRouteIndex(
             route: store.activeTrailCoordinates,
-            userLocation: location.coordinate,
-            lastIndex: lastRouteIndex,
+            userLocation: coordinate,
+            lastIndex: nil,
             windowRadius: 25
         )
-        lastRouteIndex = index
-        return index
     }
 
     private func segmentLabel(for miles: Double) -> String {
@@ -2432,6 +2547,30 @@ private struct NavigationDashboardView: View {
         if miles < 16.8 { return "Paradise Park -> Cairn Basin" }
         if miles < 26.5 { return "Cairn Basin -> Cloud Cap" }
         return "Cloud Cap -> Timberline Lodge"
+    }
+
+    private func distanceToTrailMeters(from coordinate: CLLocationCoordinate2D, route: [TrailCoordinate]) -> Double {
+        guard !route.isEmpty else { return .greatestFiniteMagnitude }
+        let current = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
+        return route.reduce(Double.greatestFiniteMagnitude) { best, point in
+            let dist = current.distance(from: CLLocation(latitude: point.latitude, longitude: point.longitude))
+            return min(best, dist)
+        }
+    }
+
+    private func locationStatusLabel(_ status: CLAuthorizationStatus) -> String {
+        switch status {
+        case .authorizedAlways, .authorizedWhenInUse:
+            return "Granted"
+        case .notDetermined:
+            return "Not Determined"
+        case .restricted:
+            return "Restricted"
+        case .denied:
+            return "Denied"
+        @unknown default:
+            return "Unknown"
+        }
     }
 }
 
