@@ -2115,10 +2115,13 @@ private struct MapHomeView: View {
         }
     }
 
-    @ViewBuilder
     private var waypointsSection: some View {
-        if store.importedTrailData != nil {
-            Section("Waypoints") {
+        Section("Waypoints") {
+            if store.importedTrailData == nil {
+                Text("Import a GPX trail in Settings to view waypoints.")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+            } else {
                 if let trailEditError = trailEditError {
                     Text(trailEditError)
                         .font(.footnote)
