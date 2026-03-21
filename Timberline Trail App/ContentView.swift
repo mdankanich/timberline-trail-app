@@ -2391,6 +2391,23 @@ private struct NavigationDashboardView: View {
     @ObservedObject var store: AppStore
     @StateObject private var locationTracker = LocationTracker()
 
+    private struct NavigationProgress {
+        let remainingMiles: Double
+        let traveledMiles: Double
+    }
+
+    private struct TrailPositionSnapshot {
+        let latitude: Double
+        let longitude: Double
+        let traveledMiles: Double
+        let offTrailMeters: Double
+    }
+
+    private struct NextWaypointSnapshot {
+        let waypoint: TrailWaypoint
+        let distanceToNextMiles: Double
+    }
+
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
@@ -2436,18 +2453,13 @@ private struct NavigationDashboardView: View {
                     }
 
                     Section("Trail Position") {
-                        if let location = locationTracker.latestLocation {
-                            let nearest = computedNearestIndex()
-                            let remaining = distanceRemainingMiles(route: store.activeTrailCoordinates, nearestIndex: nearest)
-                            let traveled = max(0, store.activeTrailDistanceMiles - remaining)
-                            let offTrailMeters = distanceToTrailMeters(from: location.coordinate, route: store.activeTrailCoordinates)
-
-                            StatRow(label: "Lat", value: String(format: "%.5f", location.coordinate.latitude))
-                            StatRow(label: "Lon", value: String(format: "%.5f", location.coordinate.longitude))
-                            StatRow(label: "Trail Mile", value: String(format: "%.1f mi", traveled))
-                            StatRow(label: "Distance Off Trail", value: "\(Int(offTrailMeters.rounded())) m")
-                            StatRow(label: "On Trail", value: offTrailMeters <= 120 ? "Yes" : "No")
-                            StatRow(label: "Current Segment", value: segmentLabel(for: traveled))
+                        if let snapshot = trailPositionSnapshot {
+                            StatRow(label: "Lat", value: String(format: "%.5f", snapshot.latitude))
+                            StatRow(label: "Lon", value: String(format: "%.5f", snapshot.longitude))
+                            StatRow(label: "Trail Mile", value: String(format: "%.1f mi", snapshot.traveledMiles))
+                            StatRow(label: "Distance Off Trail", value: "\(Int(snapshot.offTrailMeters.rounded())) m")
+                            StatRow(label: "On Trail", value: snapshot.offTrailMeters <= 120 ? "Yes" : "No")
+                            StatRow(label: "Current Segment", value: segmentLabel(for: snapshot.traveledMiles))
                         } else {
                             Text("Waiting for GPS fix.")
                                 .foregroundColor(.secondary)
@@ -2455,19 +2467,22 @@ private struct NavigationDashboardView: View {
                     }
 
                     Section("Next Waypoint") {
-                        if let metrics = nextWaypointMetrics() {
-                            StatRow(label: "Name", value: metrics.waypoint.name)
-                            StatRow(label: "Distance To Next", value: String(format: "%.1f mi", metrics.distanceToNextMiles))
-                            StatRow(label: "ETA @ 2.0 mph", value: String(format: "%.1f hrs", etaHours(distanceRemainingMiles: metrics.distanceToNextMiles)))
+                        if let next = nextWaypointSnapshot {
+                            StatRow(label: "Name", value: next.waypoint.name)
+                            StatRow(label: "Distance To Next", value: String(format: "%.1f mi", next.distanceToNextMiles))
+                            StatRow(label: "ETA @ 2.0 mph", value: String(format: "%.1f hrs", etaHours(distanceRemainingMiles: next.distanceToNextMiles)))
                         } else {
                             StatRow(label: "Status", value: "Loop complete")
                         }
                     }
 
                     Section("Progress") {
-                        let nearest = computedNearestIndex()
-                        let remaining = distanceRemainingMiles(route: store.activeTrailCoordinates, nearestIndex: nearest)
-                        StatRow(label: "Distance Remaining", value: String(format: "%.1f mi", remaining))
+                        if let progress = navigationProgress {
+                            StatRow(label: "Distance Remaining", value: String(format: "%.1f mi", progress.remainingMiles))
+                        } else {
+                            Text("Waiting for GPS fix.")
+                                .foregroundColor(.secondary)
+                        }
                     }
 
                     Section("Conditions") {
@@ -2489,11 +2504,39 @@ private struct NavigationDashboardView: View {
         .navigationViewStyle(.stack)
     }
 
-    private func computedNearestIndex() -> Int {
-        guard let location = locationTracker.latestLocation else { return 0 }
-        return nearestRouteIndex(
+    private var navigationProgress: NavigationProgress? {
+        guard let location = locationTracker.latestLocation else { return nil }
+        let nearest = nearestIndex(for: location.coordinate)
+        let remaining = distanceRemainingMiles(route: store.activeTrailCoordinates, nearestIndex: nearest)
+        let traveled = max(0, store.activeTrailDistanceMiles - remaining)
+        return NavigationProgress(remainingMiles: remaining, traveledMiles: traveled)
+    }
+
+    private var trailPositionSnapshot: TrailPositionSnapshot? {
+        guard let location = locationTracker.latestLocation else { return nil }
+        guard let progress = navigationProgress else { return nil }
+        let offTrail = distanceToTrailMeters(from: location.coordinate, route: store.activeTrailCoordinates)
+        return TrailPositionSnapshot(
+            latitude: location.coordinate.latitude,
+            longitude: location.coordinate.longitude,
+            traveledMiles: progress.traveledMiles,
+            offTrailMeters: offTrail
+        )
+    }
+
+    private var nextWaypointSnapshot: NextWaypointSnapshot? {
+        guard let progress = navigationProgress else { return nil }
+        guard let next = nextWaypoint(distanceFromStartMiles: progress.traveledMiles, waypoints: store.activeTrailWaypoints) else { return nil }
+        return NextWaypointSnapshot(
+            waypoint: next,
+            distanceToNextMiles: max(0, next.distanceFromStart - progress.traveledMiles)
+        )
+    }
+
+    private func nearestIndex(for coordinate: CLLocationCoordinate2D) -> Int {
+        nearestRouteIndex(
             route: store.activeTrailCoordinates,
-            userLocation: location.coordinate,
+            userLocation: coordinate,
             lastIndex: nil,
             windowRadius: 25
         )
@@ -2504,14 +2547,6 @@ private struct NavigationDashboardView: View {
         if miles < 16.8 { return "Paradise Park -> Cairn Basin" }
         if miles < 26.5 { return "Cairn Basin -> Cloud Cap" }
         return "Cloud Cap -> Timberline Lodge"
-    }
-
-    private func nextWaypointMetrics() -> (waypoint: TrailWaypoint, distanceToNextMiles: Double)? {
-        let nearest = computedNearestIndex()
-        let remaining = distanceRemainingMiles(route: store.activeTrailCoordinates, nearestIndex: nearest)
-        let traveled = max(0, store.activeTrailDistanceMiles - remaining)
-        guard let next = nextWaypoint(distanceFromStartMiles: traveled, waypoints: store.activeTrailWaypoints) else { return nil }
-        return (next, max(0, next.distanceFromStart - traveled))
     }
 
     private func distanceToTrailMeters(from coordinate: CLLocationCoordinate2D, route: [TrailCoordinate]) -> Double {
