@@ -2030,7 +2030,7 @@ private struct MapHomeView: View {
     }
 
     private var trailSection: some View {
-        Section("Trail") {
+        Section {
             StatRow(label: "Route", value: store.activeTrailName)
             StatRow(label: "Distance", value: String(format: "%.1f mi", store.activeTrailDistanceMiles))
             StatRow(label: "Elevation Gain", value: "\(store.activeTrailElevationGainFeet.formatted()) ft")
@@ -2052,11 +2052,13 @@ private struct MapHomeView: View {
                         .foregroundColor(.secondary)
                 }
             }
+        } header: {
+            Text("Trail")
         }
     }
 
     private var locationSection: some View {
-        Section("Location") {
+        Section {
             if let location = locationTracker.latestLocation {
                 StatRow(label: "Lat", value: String(format: "%.4f", location.coordinate.latitude))
                 StatRow(label: "Lon", value: String(format: "%.4f", location.coordinate.longitude))
@@ -2090,13 +2092,15 @@ private struct MapHomeView: View {
                 }
                 .buttonStyle(.bordered)
             }
+        } header: {
+            Text("Location")
         }
     }
 
     @ViewBuilder
     private var recentTracksSection: some View {
         if !locationTracker.sessions.isEmpty {
-            Section("Recent Tracks") {
+            Section {
                 ForEach(locationTracker.sessions.prefix(3)) { session in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(session.startedAt.formatted(date: .abbreviated, time: .shortened))
@@ -2111,12 +2115,14 @@ private struct MapHomeView: View {
                     }
                     .padding(.vertical, 2)
                 }
+            } header: {
+                Text("Recent Tracks")
             }
         }
     }
 
     private var waypointsSection: some View {
-        Section("Waypoints") {
+        Section {
             if store.importedTrailData == nil {
                 Text("Import a GPX trail in Settings to view waypoints.")
                     .font(.footnote)
@@ -2171,6 +2177,8 @@ private struct MapHomeView: View {
                     .padding(.vertical, 2)
                 }
             }
+        } header: {
+            Text("Waypoints")
         }
     }
 
