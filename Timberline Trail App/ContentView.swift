@@ -2121,65 +2121,67 @@ private struct MapHomeView: View {
         }
     }
 
-    private var waypointsSection: some View {
-        Section {
-            if store.importedTrailData == nil {
-                Text("Import a GPX trail in Settings to view waypoints.")
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
-            } else {
-                if let trailEditError = trailEditError {
-                    Text(trailEditError)
+    private var waypointsSection: AnyView {
+        AnyView(
+            Section {
+                if store.importedTrailData == nil {
+                    Text("Import a GPX trail in Settings to view waypoints.")
                         .font(.footnote)
-                        .foregroundColor(.red)
-                }
-
-                HStack {
-                    Button("Clockwise") {
-                        waypointDirection = .clockwise
-                    }
-                    .buttonStyle(waypointDirection == .clockwise ? .borderedProminent : .bordered)
-
-                    Button("Counterclockwise") {
-                        waypointDirection = .counterclockwise
-                    }
-                    .buttonStyle(waypointDirection == .counterclockwise ? .borderedProminent : .bordered)
-                }
-
-                ForEach(sortedWaypointsWithSegmentDistance(), id: \.waypoint.id) { item in
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text(item.waypoint.name)
-                                .font(.subheadline.bold())
-                            Spacer()
-                            Text(item.waypoint.type.rawValue.capitalized)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        Text(
-                            "From start: \(String(format: "%.1f", item.waypoint.distanceFromStart)) mi • " +
-                            "To next: \(item.segmentToNextMiles.map { String(format: "%.1f mi", $0) } ?? "End")"
-                        )
-                        .font(.caption)
                         .foregroundColor(.secondary)
-
-                        if let by = item.waypoint.lastEditedBy, let at = item.waypoint.lastEditedAt {
-                            Text("Last edited by \(by) at \(at.formatted(date: .abbreviated, time: .shortened))")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                        }
-
-                        Button("Edit At Current Location") {
-                            editingWaypoint = item.waypoint
-                        }
-                        .disabled(!canEditWaypoint(item.waypoint))
+                } else {
+                    if let trailEditError = trailEditError {
+                        Text(trailEditError)
+                            .font(.footnote)
+                            .foregroundColor(.red)
                     }
-                    .padding(.vertical, 2)
+
+                    HStack {
+                        Button("Clockwise") {
+                            waypointDirection = .clockwise
+                        }
+                        .buttonStyle(waypointDirection == .clockwise ? .borderedProminent : .bordered)
+
+                        Button("Counterclockwise") {
+                            waypointDirection = .counterclockwise
+                        }
+                        .buttonStyle(waypointDirection == .counterclockwise ? .borderedProminent : .bordered)
+                    }
+
+                    ForEach(sortedWaypointsWithSegmentDistance(), id: \.waypoint.id) { item in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(item.waypoint.name)
+                                    .font(.subheadline.bold())
+                                Spacer()
+                                Text(item.waypoint.type.rawValue.capitalized)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            Text(
+                                "From start: \(String(format: "%.1f", item.waypoint.distanceFromStart)) mi • " +
+                                "To next: \(item.segmentToNextMiles.map { String(format: "%.1f mi", $0) } ?? "End")"
+                            )
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                            if let by = item.waypoint.lastEditedBy, let at = item.waypoint.lastEditedAt {
+                                Text("Last edited by \(by) at \(at.formatted(date: .abbreviated, time: .shortened))")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+
+                            Button("Edit At Current Location") {
+                                editingWaypoint = item.waypoint
+                            }
+                            .disabled(!canEditWaypoint(item.waypoint))
+                        }
+                        .padding(.vertical, 2)
+                    }
                 }
+            } header: {
+                Text("Waypoints")
             }
-        } header: {
-            Text("Waypoints")
-        }
+        )
     }
 
     private var canAddWaypoint: Bool {
