@@ -2143,15 +2143,8 @@ private struct MapHomeView: View {
             }
 
             HStack {
-                Button("Clockwise") {
-                    waypointDirection = .clockwise
-                }
-                .buttonStyle(waypointDirection == .clockwise ? .borderedProminent : .bordered)
-
-                Button("Counterclockwise") {
-                    waypointDirection = .counterclockwise
-                }
-                .buttonStyle(waypointDirection == .counterclockwise ? .borderedProminent : .bordered)
+                waypointDirectionButton(title: "Clockwise", direction: .clockwise)
+                waypointDirectionButton(title: "Counterclockwise", direction: .counterclockwise)
             }
 
             ForEach(sortedWaypointsWithSegmentDistance(), id: \.waypoint.id) { item in
@@ -2184,6 +2177,21 @@ private struct MapHomeView: View {
                 }
                 .padding(.vertical, 2)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func waypointDirectionButton(title: String, direction: WaypointDirection) -> some View {
+        if waypointDirection == direction {
+            Button(title) {
+                waypointDirection = direction
+            }
+            .buttonStyle(.borderedProminent)
+        } else {
+            Button(title) {
+                waypointDirection = direction
+            }
+            .buttonStyle(.bordered)
         }
     }
 
