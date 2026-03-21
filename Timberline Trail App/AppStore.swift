@@ -596,11 +596,14 @@ final class AppStore: ObservableObject {
         }
 #if canImport(FirebaseAuth)
         let nsError = error as NSError
-        guard let code = AuthErrorCode.Code(rawValue: nsError.code) else {
+        guard
+            let code = AuthErrorCode.Code(rawValue: nsError.code),
+            let authErrorCode = AuthErrorCode(code)
+        else {
             return fallback
         }
 
-        switch code {
+        switch authErrorCode {
         case .wrongPassword, .invalidCredential, .invalidEmail, .userNotFound:
             return "Email or password is incorrect."
         case .emailAlreadyInUse:
