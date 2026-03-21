@@ -461,7 +461,7 @@ private func extractGPXTrackPoints(xml: String) -> [GPXTrackPoint] {
         let latitude = Double(readXMLAttribute("lat", in: attributes))
         let longitude = Double(readXMLAttribute("lon", in: attributes))
         let elevation = Double(readXMLTag("ele", in: block)) ?? (points.last?.elevation ?? 0)
-        guard let latitude, let longitude else { continue }
+        guard let latitude = latitude, let longitude = longitude else { continue }
         let point = GPXTrackPoint(latitude: latitude, longitude: longitude, elevation: elevation)
         if points.last != point {
             points.append(point)
@@ -554,7 +554,7 @@ func importedTrailDataFromGPX(xml: String, fileName: String) throws -> ImportedT
         throw NSError(domain: "TrailImport", code: 1, userInfo: [NSLocalizedDescriptionKey: "The GPX file does not contain enough track points."])
     }
 
-    let metadataBlock = {
+    let metadataBlock: String = {
         let pattern = #"<metadata>([\s\S]*?)</metadata>"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return "" }
         let range = NSRange(xml.startIndex..<xml.endIndex, in: xml)
@@ -1973,11 +1973,17 @@ private struct PremiumGateView: View {
 }
 
 private struct MapHomeView: View {
+    private enum WaypointDirection {
+        case clockwise
+        case counterclockwise
+    }
+
     @ObservedObject var store: AppStore
     @StateObject private var locationTracker = LocationTracker()
     @State private var editingWaypoint: TrailWaypoint?
     @State private var showingAddWaypoint = false
     @State private var trailEditError: String?
+    @State private var waypointDirection: WaypointDirection = .clockwise
 
     var body: some View {
         NavigationView {
@@ -1991,153 +1997,23 @@ private struct MapHomeView: View {
                 .frame(height: 300)
 
                 List {
-                    Section("Trail") {
-                        StatRow(label: "Route", value: store.activeTrailName)
-                        StatRow(label: "Distance", value: String(format: "%.1f mi", store.activeTrailDistanceMiles))
-                        StatRow(label: "Elevation Gain", value: "\(store.activeTrailElevationGainFeet.formatted()) ft")
-                        if store.importedTrailData == nil {
-                            Text("Import a GPX trail in Settings to enable waypoint mapping and edits.")
-                                .font(.footnote)
-                                .foregroundColor(.orange)
-                        }
+                    Section {
+                        trailRows
+                    } header: {
+                        Text("Trail")
                     }
 
-                    Section("Location") {
-                        StatRow(label: "Permission", value: locationStatusLabel(locationTracker.authorizationStatus))
-                        if let location = locationTracker.latestLocation {
-                            StatRow(label: "Lat", value: String(format: "%.4f", location.coordinate.latitude))
-                            StatRow(label: "Lon", value: String(format: "%.4f", location.coordinate.longitude))
-                        } else {
-                            Text("No GPS fix yet.")
-                                .foregroundColor(.secondary)
-                        }
-
-                        HStack {
-                            Button(locationTracker.isTracking ? "Stop Tracking" : "Start Tracking") {
-                                if locationTracker.isTracking {
-                                    locationTracker.stopTracking()
-                                } else {
-                                    locationTracker.startTracking()
-                                }
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(
-                                !locationTracker.isTracking &&
-                                (locationTracker.authorizationStatus == .denied || locationTracker.authorizationStatus == .restricted)
-                            )
-
-                            if locationTracker.authorizationStatus == .notDetermined {
-                                Button("Allow Location") {
-                                    locationTracker.requestPermission()
-                                }
-                                .buttonStyle(.bordered)
-                            } else if locationTracker.authorizationStatus == .denied || locationTracker.authorizationStatus == .restricted {
-                                Button("Open Settings") {
-                                    #if canImport(UIKit)
-                                    guard let settingsURL = URL(string: UIApplication.openSettingsURLString) else { return }
-                                    UIApplication.shared.open(settingsURL)
-                                    #endif
-                                }
-                                .buttonStyle(.bordered)
-                            }
-                        }
-
-                        StatRow(label: "Saved Sessions", value: "\(locationTracker.sessions.count)")
-                        StatRow(label: "Saved Points", value: "\(locationTracker.totalTrackedPoints)")
-                        StatRow(label: "Tracked Distance", value: String(format: "%.2f mi", locationTracker.totalTrackedDistanceMiles))
-
-                        if !locationTracker.sessions.isEmpty {
-                            Button("Clear Session Logs", role: .destructive) {
-                                locationTracker.clearSessionLogs()
-                            }
-                            .buttonStyle(.bordered)
-                        }
+                    Section {
+                        locationRows
+                    } header: {
+                        Text("Location")
                     }
 
-                    if !locationTracker.sessions.isEmpty {
-                        Section("Recent Tracks") {
-                            ForEach(locationTracker.sessions.prefix(3)) { session in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(session.startedAt.formatted(date: .abbreviated, time: .shortened))
-                                        .font(.subheadline.bold())
-                                    Text(
-                                        "\(session.points.count) pts • " +
-                                        "\(String(format: "%.2f", locationTracker.distanceMiles(for: session))) mi • " +
-                                        formatDuration(locationTracker.duration(for: session))
-                                    )
-                                    .font(.footnote)
-                                    .foregroundColor(.secondary)
-                                }
-                                .padding(.vertical, 2)
-                            }
-                        }
-                    }
-
-                    Section("Active Trip") {
-                        if let trip = store.activeTrip {
-                            StatRow(label: "Trip", value: trip.name)
-                            StatRow(label: "Dates", value: formatDateRange(start: trip.startDate, end: trip.endDate))
-                            StatRow(label: "Days Until Start", value: "\(daysUntil(trip.startDate))")
-                            StatRow(label: "Duration", value: "\(tripDurationDays(start: trip.startDate, end: trip.endDate)) days")
-                        } else {
-                            Text("No active trip yet.")
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    Section("Phase 1 Status") {
-                        Text("Auth, onboarding, trips, settings, and base map/location are wired.")
-                    }
-
-                    if store.importedTrailData != nil {
-                        Section("Waypoints") {
-                            if let trailEditError {
-                                Text(trailEditError)
-                                    .font(.footnote)
-                                    .foregroundColor(.red)
-                            }
-
-                            Button("Add Waypoint At Current Location") {
-                                showingAddWaypoint = true
-                            }
-                            .disabled(!canAddWaypoint)
-
-                            if !canAddWaypoint {
-                                Text(addWaypointBlockedReason())
-                                    .font(.footnote)
-                                    .foregroundColor(.secondary)
-                            }
-
-                            ForEach(sortedWaypointsWithSegmentDistance(), id: \.waypoint.id) { item in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    HStack {
-                                        Text(item.waypoint.name)
-                                            .font(.subheadline.bold())
-                                        Spacer()
-                                        Text(item.waypoint.type.rawValue.capitalized)
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    Text(
-                                        "From start: \(String(format: "%.1f", item.waypoint.distanceFromStart)) mi • " +
-                                        "To next: \(item.segmentToNextMiles.map { String(format: "%.1f mi", $0) } ?? "End")"
-                                    )
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-
-                                    if let by = item.waypoint.lastEditedBy, let at = item.waypoint.lastEditedAt {
-                                        Text("Last edited by \(by) at \(at.formatted(date: .abbreviated, time: .shortened))")
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                    }
-
-                                    Button("Edit At Current Location") {
-                                        editingWaypoint = item.waypoint
-                                    }
-                                    .disabled(!canEditWaypoint(item.waypoint))
-                                }
-                                .padding(.vertical, 2)
-                            }
-                        }
+                    recentTracksSection
+                    Section {
+                        waypointsRows
+                    } header: {
+                        Text("Waypoints")
                     }
                 }
                 .listStyle(.insetGrouped)
@@ -2167,6 +2043,158 @@ private struct MapHomeView: View {
         .navigationViewStyle(.stack)
     }
 
+    @ViewBuilder
+    private var trailRows: some View {
+        StatRow(label: "Route", value: store.activeTrailName)
+        StatRow(label: "Distance", value: String(format: "%.1f mi", store.activeTrailDistanceMiles))
+        StatRow(label: "Elevation Gain", value: "\(store.activeTrailElevationGainFeet.formatted()) ft")
+        if store.importedTrailData == nil {
+            Text("Import a GPX trail in Settings to enable waypoint mapping and edits.")
+                .font(.footnote)
+                .foregroundColor(.orange)
+        }
+
+        if store.importedTrailData != nil {
+            Button("Add Waypoint At Current Location") {
+                showingAddWaypoint = true
+            }
+            .disabled(!canAddWaypoint)
+
+            if !canAddWaypoint {
+                Text(addWaypointBlockedReason())
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var locationRows: some View {
+        if let location = locationTracker.latestLocation {
+            StatRow(label: "Lat", value: String(format: "%.4f", location.coordinate.latitude))
+            StatRow(label: "Lon", value: String(format: "%.4f", location.coordinate.longitude))
+        } else {
+            Text("No GPS fix yet.")
+                .foregroundColor(.secondary)
+        }
+
+        HStack {
+            Button(locationTracker.isTracking ? "Stop Tracking" : "Start Tracking") {
+                if locationTracker.isTracking {
+                    locationTracker.stopTracking()
+                } else {
+                    locationTracker.startTracking()
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(
+                !locationTracker.isTracking &&
+                (locationTracker.authorizationStatus == .denied || locationTracker.authorizationStatus == .restricted)
+            )
+        }
+
+        StatRow(label: "Saved Sessions", value: "\(locationTracker.sessions.count)")
+        StatRow(label: "Saved Points", value: "\(locationTracker.totalTrackedPoints)")
+        StatRow(label: "Tracked Distance", value: String(format: "%.2f mi", locationTracker.totalTrackedDistanceMiles))
+
+        if !locationTracker.sessions.isEmpty {
+            Button("Clear Session Logs", role: .destructive) {
+                locationTracker.clearSessionLogs()
+            }
+            .buttonStyle(.bordered)
+        }
+    }
+
+    @ViewBuilder
+    private var recentTracksSection: some View {
+        if !locationTracker.sessions.isEmpty {
+            Section {
+                ForEach(locationTracker.sessions.prefix(3)) { session in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(session.startedAt.formatted(date: .abbreviated, time: .shortened))
+                            .font(.subheadline.bold())
+                        Text(
+                            "\(session.points.count) pts • " +
+                            "\(String(format: "%.2f", locationTracker.distanceMiles(for: session))) mi • " +
+                            formatDuration(locationTracker.duration(for: session))
+                        )
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                    }
+                    .padding(.vertical, 2)
+                }
+            } header: {
+                Text("Recent Tracks")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var waypointsRows: some View {
+        if store.importedTrailData == nil {
+            Text("Import a GPX trail in Settings to view waypoints.")
+                .font(.footnote)
+                .foregroundColor(.secondary)
+        } else {
+            if let trailEditError = trailEditError {
+                Text(trailEditError)
+                    .font(.footnote)
+                    .foregroundColor(.red)
+            }
+
+            HStack {
+                waypointDirectionButton(title: "Clockwise", direction: .clockwise)
+                waypointDirectionButton(title: "Counterclockwise", direction: .counterclockwise)
+            }
+
+            ForEach(sortedWaypointsWithSegmentDistance(), id: \.waypoint.id) { item in
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(item.waypoint.name)
+                            .font(.subheadline.bold())
+                        Spacer()
+                        Text(item.waypoint.type.rawValue.capitalized)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    Text(
+                        "From start: \(String(format: "%.1f", item.waypoint.distanceFromStart)) mi • " +
+                        "To next: \(item.segmentToNextMiles.map { String(format: "%.1f mi", $0) } ?? "End")"
+                    )
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                    if let by = item.waypoint.lastEditedBy, let at = item.waypoint.lastEditedAt {
+                        Text("Last edited by \(by) at \(at.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+
+                    Button("Edit At Current Location") {
+                        editingWaypoint = item.waypoint
+                    }
+                    .disabled(!canEditWaypoint(item.waypoint))
+                }
+                .padding(.vertical, 2)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func waypointDirectionButton(title: String, direction: WaypointDirection) -> some View {
+        if waypointDirection == direction {
+            Button(title) {
+                waypointDirection = direction
+            }
+            .buttonStyle(.borderedProminent)
+        } else {
+            Button(title) {
+                waypointDirection = direction
+            }
+            .buttonStyle(.bordered)
+        }
+    }
+
     private var canAddWaypoint: Bool {
         guard store.canEditWaypoints(), let location = locationTracker.latestLocation else { return false }
         return distanceToTrailMeters(from: location.coordinate) <= 120
@@ -2192,10 +2220,16 @@ private struct MapHomeView: View {
     }
 
     private func sortedWaypointsWithSegmentDistance() -> [(waypoint: TrailWaypoint, segmentToNextMiles: Double?)] {
-        let waypoints = store.activeTrailWaypoints.sorted { $0.distanceFromStart < $1.distanceFromStart }
+        let ascending = store.activeTrailWaypoints.sorted { $0.distanceFromStart < $1.distanceFromStart }
+        let waypoints = waypointDirection == .clockwise ? ascending : Array(ascending.reversed())
         return waypoints.enumerated().map { index, waypoint in
-            let nextDistance = index + 1 < waypoints.count ? waypoints[index + 1].distanceFromStart : nil
-            let segment = nextDistance.map { max(0, $0 - waypoint.distanceFromStart) }
+            let nextDistanceFromStart = index + 1 < waypoints.count ? waypoints[index + 1].distanceFromStart : nil
+            let segment = nextDistanceFromStart.map { nextDistance in
+                if waypointDirection == .clockwise {
+                    return max(0, nextDistance - waypoint.distanceFromStart)
+                }
+                return max(0, waypoint.distanceFromStart - nextDistance)
+            }
             return (waypoint: waypoint, segmentToNextMiles: segment)
         }
     }
@@ -2207,21 +2241,6 @@ private struct MapHomeView: View {
         return route.reduce(Double.greatestFiniteMagnitude) { best, point in
             let distance = current.distance(from: CLLocation(latitude: point.latitude, longitude: point.longitude))
             return min(best, distance)
-        }
-    }
-
-    private func locationStatusLabel(_ status: CLAuthorizationStatus) -> String {
-        switch status {
-        case .authorizedAlways, .authorizedWhenInUse:
-            return "Granted"
-        case .notDetermined:
-            return "Not Determined"
-        case .restricted:
-            return "Restricted"
-        case .denied:
-            return "Denied"
-        @unknown default:
-            return "Unknown"
         }
     }
 }
@@ -2273,7 +2292,7 @@ private struct WaypointEditorSheet: View {
                     }
                 }
 
-                if let errorMessage {
+                if let errorMessage = errorMessage {
                     Section {
                         Text(errorMessage)
                             .font(.footnote)
@@ -3449,6 +3468,7 @@ private struct EditTripView: View {
 
 private struct SettingsView: View {
     @ObservedObject var store: AppStore
+    @StateObject private var locationTracker = LocationTracker()
     @State private var isImportingFile = false
     @State private var pendingImportURL: URL?
     @State private var pendingImportPreview: TrailImportPreview?
@@ -3522,6 +3542,27 @@ private struct SettingsView: View {
                         ForEach(MapType.allCases) { mapType in
                             Text(mapType.rawValue.capitalized).tag(mapType)
                         }
+                    }
+                }
+
+                Section("Location Permission") {
+                    StatRow(label: "Status", value: locationStatusLabel(locationTracker.authorizationStatus))
+
+                    if locationTracker.authorizationStatus == .notDetermined {
+                        Button("Allow Location Access") {
+                            locationTracker.requestPermission()
+                        }
+                    } else if locationTracker.authorizationStatus == .denied || locationTracker.authorizationStatus == .restricted {
+                        Button("Open iOS Settings") {
+                            #if canImport(UIKit)
+                            guard let settingsURL = URL(string: UIApplication.openSettingsURLString) else { return }
+                            UIApplication.shared.open(settingsURL)
+                            #endif
+                        }
+                    } else {
+                        Text("Location access is enabled for map and waypoint features.")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
                     }
                 }
 
@@ -3666,6 +3707,21 @@ private struct SettingsView: View {
         let parts = name.split(separator: " ").prefix(2)
         let value = parts.map { String($0.prefix(1)).uppercased() }.joined()
         return value.isEmpty ? "H" : value
+    }
+
+    private func locationStatusLabel(_ status: CLAuthorizationStatus) -> String {
+        switch status {
+        case .authorizedAlways, .authorizedWhenInUse:
+            return "Granted"
+        case .notDetermined:
+            return "Not Determined"
+        case .restricted:
+            return "Restricted"
+        case .denied:
+            return "Denied"
+        @unknown default:
+            return "Unknown"
+        }
     }
 }
 
