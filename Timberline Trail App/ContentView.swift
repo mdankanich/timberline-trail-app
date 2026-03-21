@@ -3473,6 +3473,7 @@ private struct SettingsView: View {
     @State private var pendingImportURL: URL?
     @State private var pendingImportPreview: TrailImportPreview?
     @State private var importErrorMessage: String?
+    @State private var showingDeleteAccountConfirmation = false
 
     var body: some View {
         NavigationView {
@@ -3678,10 +3679,25 @@ private struct SettingsView: View {
                     Button("Sign Out", role: .destructive) {
                         store.signOut()
                     }
+
+                    Button("Delete Account", role: .destructive) {
+                        showingDeleteAccountConfirmation = true
+                    }
+                    .disabled(store.isAuthLoading)
                 }
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
+            .alert("Delete Account?", isPresented: $showingDeleteAccountConfirmation) {
+                Button("Delete Account", role: .destructive) {
+                    Task {
+                        await store.deleteAccount()
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This will permanently delete your account and clear all app data on this device.")
+            }
             .fileImporter(
                 isPresented: $isImportingFile,
                 allowedContentTypes: allowedGPXImportTypes,

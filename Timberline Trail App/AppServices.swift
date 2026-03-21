@@ -70,6 +70,7 @@ protocol AuthService {
     func requestPasswordReset(email: String) async throws
     func signInWithApple(credential: ASAuthorizationAppleIDCredential, nonce: String?) async throws -> AuthSession
     func signOut()
+    func deleteCurrentUser() async throws
 }
 
 protocol SettingsService {
@@ -83,6 +84,7 @@ protocol UserService {
     func clearLocalProfile()
     func fetchRemoteProfile() async -> UserProfile?
     func pushRemoteProfile(_ profile: UserProfile) async
+    func deleteRemoteProfile() async throws
 }
 
 protocol TripService {
@@ -91,6 +93,7 @@ protocol TripService {
     func clearLocalTrips()
     func fetchRemoteTrips() async -> TripsSnapshot?
     func pushRemoteTrips(_ snapshot: TripsSnapshot) async
+    func deleteRemoteTrips() async throws
 }
 
 protocol AppContentService {
@@ -185,6 +188,16 @@ final class LocalAuthService: AuthService {
     func signOut() {
         defaults.removeObject(forKey: AppPersistenceKeys.session)
     }
+
+    func deleteCurrentUser() async throws {
+        let current = currentSession()
+        signOut()
+
+        guard let email = current?.email else { return }
+        var users = PersistenceCodec.load([StoredUser].self, key: AppPersistenceKeys.users, defaults: defaults) ?? []
+        users.removeAll { $0.email == email }
+        PersistenceCodec.persist(users, key: AppPersistenceKeys.users, defaults: defaults)
+    }
 }
 
 #if canImport(FirebaseAuth)
@@ -245,6 +258,11 @@ final class FirebaseAuthService: AuthService {
     func signOut() {
         try? Auth.auth().signOut()
     }
+
+    func deleteCurrentUser() async throws {
+        guard let user = Auth.auth().currentUser else { return }
+        try await user.delete()
+    }
 }
 #endif
 
@@ -285,6 +303,7 @@ final class LocalUserService: UserService {
 
     func fetchRemoteProfile() async -> UserProfile? { nil }
     func pushRemoteProfile(_ profile: UserProfile) async {}
+    func deleteRemoteProfile() async throws {}
 }
 
 final class LocalTripService: TripService {
@@ -316,6 +335,7 @@ final class LocalTripService: TripService {
 
     func fetchRemoteTrips() async -> TripsSnapshot? { nil }
     func pushRemoteTrips(_ snapshot: TripsSnapshot) async {}
+    func deleteRemoteTrips() async throws {}
 }
 
 final class LocalAppContentService: AppContentService {
@@ -380,6 +400,16 @@ final class FirebaseUserCloudService: UserService {
             // Keep local state as source of truth when remote sync fails.
         }
     }
+
+    func deleteRemoteProfile() async throws {
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        try await Firestore.firestore()
+            .collection("users")
+            .document(uid)
+            .collection("data")
+            .document("profile")
+            .delete()
+    }
 }
 
 final class FirebaseTripCloudService: TripService {
@@ -433,6 +463,16 @@ final class FirebaseTripCloudService: TripService {
             // Keep local state as source of truth when remote sync fails.
         }
     }
+
+    func deleteRemoteTrips() async throws {
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        try await Firestore.firestore()
+            .collection("users")
+            .document(uid)
+            .collection("data")
+            .document("trips")
+            .delete()
+    }
 }
 
 final class FirebaseAppContentService: AppContentService {
@@ -481,6 +521,7 @@ final class CompositeUserService: UserService {
     func clearLocalProfile() { local.clearLocalProfile() }
     func fetchRemoteProfile() async -> UserProfile? { await remote?.fetchRemoteProfile() }
     func pushRemoteProfile(_ profile: UserProfile) async { await remote?.pushRemoteProfile(profile) }
+    func deleteRemoteProfile() async throws { try await remote?.deleteRemoteProfile() }
 }
 
 final class CompositeTripService: TripService {
@@ -497,6 +538,7 @@ final class CompositeTripService: TripService {
     func clearLocalTrips() { local.clearLocalTrips() }
     func fetchRemoteTrips() async -> TripsSnapshot? { await remote?.fetchRemoteTrips() }
     func pushRemoteTrips(_ snapshot: TripsSnapshot) async { await remote?.pushRemoteTrips(snapshot) }
+    func deleteRemoteTrips() async throws { try await remote?.deleteRemoteTrips() }
 }
 
 struct AppEnvironment {
