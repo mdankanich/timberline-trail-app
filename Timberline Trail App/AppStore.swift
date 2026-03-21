@@ -595,7 +595,8 @@ final class AppStore: ObservableObject {
             return message
         }
 #if canImport(FirebaseAuth)
-        guard let code = AuthErrorCode(rawValue: (error as NSError).code) else {
+        let nsError = error as NSError
+        guard let code = AuthErrorCode.Code(rawValue: nsError.code) else {
             return fallback
         }
 

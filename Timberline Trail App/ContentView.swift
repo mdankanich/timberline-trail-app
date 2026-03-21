@@ -2514,6 +2514,15 @@ private struct NavigationDashboardView: View {
         return (next, max(0, next.distanceFromStart - traveled))
     }
 
+    private func distanceToTrailMeters(from coordinate: CLLocationCoordinate2D, route: [TrailCoordinate]) -> Double {
+        guard !route.isEmpty else { return .greatestFiniteMagnitude }
+        let current = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
+        return route.reduce(Double.greatestFiniteMagnitude) { best, point in
+            let dist = current.distance(from: CLLocation(latitude: point.latitude, longitude: point.longitude))
+            return min(best, dist)
+        }
+    }
+
     private func locationStatusLabel(_ status: CLAuthorizationStatus) -> String {
         switch status {
         case .authorizedAlways, .authorizedWhenInUse:
