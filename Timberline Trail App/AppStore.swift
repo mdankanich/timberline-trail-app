@@ -134,10 +134,13 @@ final class AppStore: ObservableObject {
         authError = nil
         authInfoMessage = nil
         isAuthLoading = true
-        defer { isAuthLoading = false }
+        defer {
+            isAuthLoading = false
+            currentNonce = nil
+        }
         switch result {
-        case .failure:
-            authError = "Apple Sign In failed."
+        case .failure(let error):
+            authError = mapAppleAuthorizationError(error)
         case .success(let authorization):
             guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else {
                 authError = "Apple credential missing."
@@ -612,11 +615,33 @@ final class AppStore: ObservableObject {
         case .tooManyRequests:
             return "Too many attempts. Please wait and try again."
         default:
-            return fallback
+            return nsError.localizedDescription.isEmpty ? fallback : nsError.localizedDescription
         }
 #else
         return fallback
 #endif
+    }
+
+    private func mapAppleAuthorizationError(_ error: Error) -> String {
+        if let appleError = error as? ASAuthorizationError {
+            switch appleError.code {
+            case .canceled:
+                return "Apple Sign In was canceled."
+            case .failed:
+                return "Apple Sign In failed. Please try again."
+            case .invalidResponse:
+                return "Apple Sign In returned an invalid response."
+            case .notHandled:
+                return "Apple Sign In request was not handled."
+            case .unknown:
+                return "Apple Sign In encountered an unknown error."
+            @unknown default:
+                return "Apple Sign In failed."
+            }
+        }
+
+        let message = (error as NSError).localizedDescription
+        return message.isEmpty ? "Apple Sign In failed." : message
     }
 
     private func sha256(_ input: String) -> String {
