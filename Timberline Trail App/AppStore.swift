@@ -163,7 +163,7 @@ final class AppStore: ObservableObject {
 
                 await refreshFromCloud()
             } catch {
-                authError = mapAuthError(error, fallback: "Apple Sign In failed.")
+                authError = mapAppleSignInError(error)
             }
         }
     }
@@ -667,6 +667,30 @@ final class AppStore: ObservableObject {
 
         let message = (error as NSError).localizedDescription
         return message.isEmpty ? "Apple Sign In failed." : message
+    }
+
+    private func mapAppleSignInError(_ error: Error) -> String {
+#if canImport(FirebaseAuth)
+        let nsError = error as NSError
+        if let code = AuthErrorCode.Code(rawValue: nsError.code) {
+            switch code {
+            case .invalidCredential, .invalidEmail:
+                return "Apple Sign In configuration is invalid. Check Apple provider settings in Firebase."
+            case .operationNotAllowed:
+                return "Apple Sign In is not enabled in Firebase Authentication."
+            case .networkError:
+                return "Network error during Apple Sign In. Please try again."
+            case .userDisabled:
+                return "This account is disabled."
+            default:
+                break
+            }
+        }
+        let message = nsError.localizedDescription
+        return message.isEmpty ? "Apple Sign In failed." : message
+#else
+        return mapAuthError(error, fallback: "Apple Sign In failed.")
+#endif
     }
 
     private func sha256(_ input: String) -> String {
