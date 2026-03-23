@@ -1724,14 +1724,13 @@ struct AuthView: View {
 
     var body: some View {
         NavigationView {
-            VStack(spacing: 18) {
-                Spacer(minLength: 12)
-
+            VStack(spacing: 16) {
+                Spacer(minLength: 24)
                 Text("Sign up or log in\nto access your profile")
-                    .font(.system(size: 40, weight: .bold, design: .rounded))
+                    .font(.system(size: 20, weight: .semibold, design: .rounded))
                     .multilineTextAlignment(.center)
-                    .lineSpacing(2)
-                    .padding(.bottom, 8)
+                    .lineSpacing(3)
+                    .padding(.bottom, 12)
 
                 SignInWithAppleButton(
                     .signIn,
@@ -1744,9 +1743,9 @@ struct AuthView: View {
                         }
                     }
                 )
-                .signInWithAppleButtonStyle(.whiteOutline)
-                .frame(height: 54)
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .signInWithAppleButtonStyle(.white)
+                .frame(height: 60)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .disabled(store.isAuthLoading)
 
                 socialOptionButton(title: "Continue with Google", iconText: "G", iconColor: .orange) {
@@ -1770,10 +1769,10 @@ struct AuthView: View {
                     socialInfoMessage = nil
                 }
                 .frame(maxWidth: .infinity)
-                .frame(height: 56)
+                .frame(height: 60)
                 .background(Color(red: 0.03, green: 0.14, blue: 0.08))
                 .foregroundColor(.white)
-                .font(.headline)
+                .font(.title3.weight(.semibold))
                 .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .disabled(store.isAuthLoading)
 
@@ -1819,6 +1818,7 @@ struct AuthView: View {
                             .disabled(store.isAuthLoading)
                         }
                     }
+                    .padding(.top, 4)
                 }
 
                 if let error = store.authError {
@@ -1852,9 +1852,10 @@ struct AuthView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                Spacer(minLength: 6)
+                Spacer(minLength: 12)
             }
-            .padding()
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
             .navigationBarHidden(true)
             .onChange(of: mode) { _ in
                 store.clearAuthMessages()
@@ -1882,9 +1883,9 @@ struct AuthView: View {
             }
             .padding(.horizontal, 16)
             .frame(maxWidth: .infinity)
-            .frame(height: 58)
+            .frame(height: 60)
             .background(Color(UIColor.systemGray6))
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
         .buttonStyle(.plain)
         .disabled(store.isAuthLoading)
