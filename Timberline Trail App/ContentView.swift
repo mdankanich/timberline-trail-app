@@ -1743,8 +1743,9 @@ struct AuthView: View {
                         }
                     }
                 )
-                .signInWithAppleButtonStyle(.white)
+                .signInWithAppleButtonStyle(.whiteOutline)
                 .frame(height: 60)
+                .background(Color(UIColor.systemGray6))
                 .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .disabled(store.isAuthLoading)
 
