@@ -1713,6 +1713,8 @@ struct AuthView: View {
     @State private var email = ""
     @State private var password = ""
     @State private var mode: Mode = .signIn
+    @State private var showEmailAuth = false
+    @State private var socialInfoMessage: String?
 
     enum Mode: String, CaseIterable, Identifiable {
         case signIn = "Sign In"
@@ -1722,32 +1724,114 @@ struct AuthView: View {
 
     var body: some View {
         NavigationView {
-            VStack(spacing: 16) {
-                Text("Timberline Trail")
-                    .font(.largeTitle.bold())
-                Text("Phase 1: local auth flow")
-                    .foregroundColor(.secondary)
+            VStack(spacing: 18) {
+                Spacer(minLength: 12)
 
-                Picker("Mode", selection: $mode) {
-                    ForEach(Mode.allCases) { option in
-                        Text(option.rawValue).tag(option)
+                Text("Sign up or log in\nto access your profile")
+                    .font(.system(size: 40, weight: .bold, design: .rounded))
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(2)
+                    .padding(.bottom, 8)
+
+                SignInWithAppleButton(
+                    .signIn,
+                    onRequest: { request in
+                        store.handleAppleRequest(request)
+                    },
+                    onCompletion: { result in
+                        Task {
+                            await store.handleAppleCompletion(result)
+                        }
+                    }
+                )
+                .signInWithAppleButtonStyle(.whiteOutline)
+                .frame(height: 54)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .disabled(store.isAuthLoading)
+
+                socialOptionButton(title: "Continue with Google", iconText: "G", iconColor: .orange) {
+                    socialInfoMessage = "Google sign-in is coming soon."
+                }
+
+                socialOptionButton(title: "Continue with Facebook", iconText: "f", iconColor: .blue) {
+                    socialInfoMessage = "Facebook sign-in is coming soon."
+                }
+
+                HStack {
+                    Rectangle().fill(Color.secondary.opacity(0.25)).frame(height: 1)
+                    Text("or")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                    Rectangle().fill(Color.secondary.opacity(0.25)).frame(height: 1)
+                }
+
+                Button("Continue with email") {
+                    showEmailAuth = true
+                    socialInfoMessage = nil
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 56)
+                .background(Color(red: 0.03, green: 0.14, blue: 0.08))
+                .foregroundColor(.white)
+                .font(.headline)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .disabled(store.isAuthLoading)
+
+                if showEmailAuth {
+                    VStack(spacing: 12) {
+                        Picker("Mode", selection: $mode) {
+                            ForEach(Mode.allCases) { option in
+                                Text(option.rawValue).tag(option)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+
+                        TextField("Email", text: $email)
+                            .textInputAutocapitalization(.never)
+                            .keyboardType(.emailAddress)
+                            .disableAutocorrection(true)
+                            .textFieldStyle(RoundedBorderTextFieldStyle())
+
+                        SecureField("Password (6+ chars)", text: $password)
+                            .textFieldStyle(RoundedBorderTextFieldStyle())
+
+                        Button(mode == .signIn ? "Sign In" : "Create Account") {
+                            Task {
+                                if mode == .signIn {
+                                    await store.signIn(email: email, password: password)
+                                } else {
+                                    await store.signUp(email: email, password: password)
+                                }
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .frame(maxWidth: .infinity)
+                        .disabled(store.isAuthLoading)
+
+                        if mode == .signIn {
+                            Button("Forgot password?") {
+                                Task {
+                                    await store.requestPasswordReset(email: email)
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .disabled(store.isAuthLoading)
+                        }
                     }
                 }
-                .pickerStyle(.segmented)
-
-                TextField("Email", text: $email)
-                    .textInputAutocapitalization(.never)
-                    .keyboardType(.emailAddress)
-                    .disableAutocorrection(true)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-
-                SecureField("Password (6+ chars)", text: $password)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
 
                 if let error = store.authError {
                     Text(error)
                         .font(.footnote)
                         .foregroundColor(.red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                if let socialInfoMessage = socialInfoMessage {
+                    Text(socialInfoMessage)
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
@@ -1758,65 +1842,17 @@ struct AuthView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                Button(mode == .signIn ? "Sign In" : "Create Account") {
-                    Task {
-                        if mode == .signIn {
-                            await store.signIn(email: email, password: password)
-                        } else {
-                            await store.signUp(email: email, password: password)
-                        }
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .frame(maxWidth: .infinity)
-                .disabled(store.isAuthLoading)
-
-                if mode == .signIn {
-                    Button("Forgot password?") {
-                        Task {
-                            await store.requestPasswordReset(email: email)
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .disabled(store.isAuthLoading)
-                }
-
-                Group {
-                    HStack {
-                        Rectangle().fill(Color.secondary.opacity(0.3)).frame(height: 1)
-                        Text("or")
+                if store.isAuthLoading {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text("Working...")
                             .font(.footnote)
                             .foregroundColor(.secondary)
-                        Rectangle().fill(Color.secondary.opacity(0.3)).frame(height: 1)
                     }
-                    .padding(.top, 8)
-
-                    SignInWithAppleButton(
-                        .signIn,
-                        onRequest: { request in
-                            store.handleAppleRequest(request)
-                        },
-                        onCompletion: { result in
-                            Task {
-                                await store.handleAppleCompletion(result)
-                            }
-                        }
-                    )
-                    .signInWithAppleButtonStyle(.black)
-                    .frame(height: 44)
-                    .disabled(store.isAuthLoading)
-                    
-                    if store.isAuthLoading {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                            Text("Working...")
-                                .font(.footnote)
-                                .foregroundColor(.secondary)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
+
+                Spacer(minLength: 6)
             }
             .padding()
             .navigationBarHidden(true)
@@ -1825,6 +1861,33 @@ struct AuthView: View {
             }
         }
         .navigationViewStyle(.stack)
+    }
+
+    private func socialOptionButton(title: String, iconText: String, iconColor: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                Circle()
+                    .fill(.white)
+                    .frame(width: 34, height: 34)
+                    .overlay(
+                        Text(iconText)
+                            .font(.title3.bold())
+                            .foregroundColor(iconColor)
+                    )
+
+                Text(title)
+                    .font(.title3.weight(.semibold))
+                    .foregroundColor(.primary)
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity)
+            .frame(height: 58)
+            .background(Color(UIColor.systemGray6))
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(store.isAuthLoading)
     }
 }
 
