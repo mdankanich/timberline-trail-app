@@ -155,7 +155,16 @@ final class AppStore: ObservableObject {
                 let family = credential.fullName?.familyName ?? ""
                 let fullName = "\(given) \(family)".trimmingCharacters(in: .whitespacesAndNewlines)
                 if !fullName.isEmpty {
-                    let newProfile = UserProfile(name: fullName)
+                    // Apple only returns name reliably on first authorization.
+                    let newProfile = UserProfile(name: fullName, photoURI: profile?.photoURI)
+                    profile = newProfile
+                    userService.saveLocalProfile(newProfile)
+                    await userService.pushRemoteProfile(newProfile)
+                } else if profile == nil {
+                    // Returning Apple users may not get name/email again. Seed profile once
+                    // so they are not forced back through onboarding on every login.
+                    let fallback = fallbackAppleProfileName(credential: credential, session: session)
+                    let newProfile = UserProfile(name: fallback)
                     profile = newProfile
                     userService.saveLocalProfile(newProfile)
                     await userService.pushRemoteProfile(newProfile)
@@ -723,5 +732,21 @@ final class AppStore: ObservableObject {
         }
 
         return result
+    }
+
+    private func fallbackAppleProfileName(
+        credential: ASAuthorizationAppleIDCredential,
+        session: AuthSession?
+    ) -> String {
+        if let existingName = profile?.name.trimmingCharacters(in: .whitespacesAndNewlines), !existingName.isEmpty {
+            return existingName
+        }
+
+        let resolvedEmail = (credential.email ?? session?.email ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if let localPart = resolvedEmail.split(separator: "@").first, !localPart.isEmpty {
+            return String(localPart)
+        }
+
+        return "Hiker"
     }
 }
