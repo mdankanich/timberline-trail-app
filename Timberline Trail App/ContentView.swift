@@ -33,6 +33,8 @@ struct Trip: Identifiable, Codable, Hashable {
 struct UserProfile: Codable, Hashable {
     var name: String
     var photoURI: String? = nil
+    var email: String? = nil
+    var phone: String? = nil
 }
 
 struct AuthSession: Codable, Hashable {
@@ -1743,9 +1745,9 @@ struct AuthView: View {
                         }
                     }
                 )
-                .signInWithAppleButtonStyle(.whiteOutline)
+                .signInWithAppleButtonStyle(.white)
+                .colorMultiply(Color(UIColor.systemGray6))
                 .frame(height: 60)
-                .background(Color(UIColor.systemGray6))
                 .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .disabled(store.isAuthLoading)
 
@@ -3558,9 +3560,13 @@ private struct SettingsView: View {
                                 )
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(store.profile?.name ?? "Hiker")
-                                Text(store.session?.email ?? "")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
+                                if let displayEmail = (store.profile?.email ?? store.session?.email)?
+                                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                                   !displayEmail.isEmpty {
+                                    Text(displayEmail)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
                             }
                         }
                     }
@@ -3814,6 +3820,8 @@ private struct ProfileView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var store: AppStore
     @State private var draftName = ""
+    @State private var draftEmail = ""
+    @State private var draftPhone = ""
     @State private var draftPhotoURI: String?
     @State private var selectedImage: UIImage?
     @State private var showingImagePicker = false
@@ -3839,20 +3847,23 @@ private struct ProfileView: View {
 
                 TextField("Name", text: $draftName)
                     .textInputAutocapitalization(.words)
-                if let email = store.session?.email {
-                    HStack {
-                        Text("Email")
-                            .foregroundColor(.secondary)
-                        Spacer()
-                        Text(email)
-                    }
-                }
+                TextField("Email", text: $draftEmail)
+                    .textInputAutocapitalization(.never)
+                    .keyboardType(.emailAddress)
+                    .disableAutocorrection(true)
+                TextField("Phone", text: $draftPhone)
+                    .keyboardType(.phonePad)
             }
 
             Section {
                 Button("Save Profile") {
                     let finalPhotoURI = persistSelectedImageIfNeeded() ?? draftPhotoURI
-                    store.updateProfile(name: draftName, photoURI: finalPhotoURI)
+                    store.updateProfile(
+                        name: draftName,
+                        photoURI: finalPhotoURI,
+                        email: normalizedField(draftEmail),
+                        phone: normalizedField(draftPhone)
+                    )
                     dismiss()
                 }
                 .disabled(draftName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -3869,6 +3880,8 @@ private struct ProfileView: View {
         })
         .onAppear {
             draftName = store.profile?.name ?? ""
+            draftEmail = store.profile?.email ?? store.session?.email ?? ""
+            draftPhone = store.profile?.phone ?? ""
             draftPhotoURI = store.profile?.photoURI
         }
         .sheet(isPresented: $showingImagePicker) {
@@ -3892,6 +3905,11 @@ private struct ProfileView: View {
 #else
         return nil
 #endif
+    }
+
+    private func normalizedField(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 

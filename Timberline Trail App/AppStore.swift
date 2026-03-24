@@ -156,7 +156,12 @@ final class AppStore: ObservableObject {
                 let fullName = "\(given) \(family)".trimmingCharacters(in: .whitespacesAndNewlines)
                 if !fullName.isEmpty {
                     // Apple only returns name reliably on first authorization.
-                    let newProfile = UserProfile(name: fullName, photoURI: profile?.photoURI)
+                    let newProfile = UserProfile(
+                        name: fullName,
+                        photoURI: profile?.photoURI,
+                        email: profile?.email ?? credential.email ?? session?.email,
+                        phone: profile?.phone
+                    )
                     profile = newProfile
                     userService.saveLocalProfile(newProfile)
                     await userService.pushRemoteProfile(newProfile)
@@ -164,7 +169,12 @@ final class AppStore: ObservableObject {
                     // Returning Apple users may not get name/email again. Seed profile once
                     // so they are not forced back through onboarding on every login.
                     let fallback = fallbackAppleProfileName(credential: credential, session: session)
-                    let newProfile = UserProfile(name: fallback)
+                    let newProfile = UserProfile(
+                        name: fallback,
+                        photoURI: nil,
+                        email: credential.email ?? session?.email,
+                        phone: nil
+                    )
                     profile = newProfile
                     userService.saveLocalProfile(newProfile)
                     await userService.pushRemoteProfile(newProfile)
@@ -226,17 +236,29 @@ final class AppStore: ObservableObject {
     func completeOnboarding(name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        let nextProfile = UserProfile(name: trimmed)
+        let nextProfile = UserProfile(
+            name: trimmed,
+            photoURI: profile?.photoURI,
+            email: profile?.email ?? session?.email,
+            phone: profile?.phone
+        )
         profile = nextProfile
         userService.saveLocalProfile(nextProfile)
         Task { await userService.pushRemoteProfile(nextProfile) }
         refreshFlowState()
     }
 
-    func updateProfile(name: String, photoURI: String? = nil) {
+    func updateProfile(name: String, photoURI: String? = nil, email: String? = nil, phone: String? = nil) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        let next = UserProfile(name: trimmed, photoURI: photoURI ?? profile?.photoURI)
+        let normalizedEmail = normalizeOptionalField(email) ?? normalizeOptionalField(profile?.email) ?? session?.email
+        let normalizedPhone = normalizeOptionalField(phone) ?? normalizeOptionalField(profile?.phone)
+        let next = UserProfile(
+            name: trimmed,
+            photoURI: photoURI ?? profile?.photoURI,
+            email: normalizedEmail,
+            phone: normalizedPhone
+        )
         profile = next
         userService.saveLocalProfile(next)
         Task { await userService.pushRemoteProfile(next) }
@@ -748,5 +770,12 @@ final class AppStore: ObservableObject {
         }
 
         return "Hiker"
+    }
+
+    private func normalizeOptionalField(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return nil
+        }
+        return value
     }
 }
