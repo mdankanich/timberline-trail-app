@@ -95,13 +95,13 @@ struct AppSettings: Codable, Hashable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.appearance = try container.decodeIfPresent(AppearanceMode.self, forKey: .appearance) ?? .default.appearance
-        self.units = try container.decodeIfPresent(Units.self, forKey: .units) ?? .default.units
-        self.mapType = try container.decodeIfPresent(MapType.self, forKey: .mapType) ?? .default.mapType
-        self.gpsInterval = try container.decodeIfPresent(GPSInterval.self, forKey: .gpsInterval) ?? .default.gpsInterval
-        self.trackingPowerMode = try container.decodeIfPresent(TrackingPowerMode.self, forKey: .trackingPowerMode) ?? .default.trackingPowerMode
-        self.autoLockEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoLockEnabled) ?? .default.autoLockEnabled
-        self.autoLockMinutes = try container.decodeIfPresent(AutoLockMinutes.self, forKey: .autoLockMinutes) ?? .default.autoLockMinutes
+        self.appearance = try container.decodeIfPresent(AppearanceMode.self, forKey: .appearance) ?? AppSettings.default.appearance
+        self.units = try container.decodeIfPresent(Units.self, forKey: .units) ?? AppSettings.default.units
+        self.mapType = try container.decodeIfPresent(MapType.self, forKey: .mapType) ?? AppSettings.default.mapType
+        self.gpsInterval = try container.decodeIfPresent(GPSInterval.self, forKey: .gpsInterval) ?? AppSettings.default.gpsInterval
+        self.trackingPowerMode = try container.decodeIfPresent(TrackingPowerMode.self, forKey: .trackingPowerMode) ?? AppSettings.default.trackingPowerMode
+        self.autoLockEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoLockEnabled) ?? AppSettings.default.autoLockEnabled
+        self.autoLockMinutes = try container.decodeIfPresent(AutoLockMinutes.self, forKey: .autoLockMinutes) ?? AppSettings.default.autoLockMinutes
     }
 
     func encode(to encoder: Encoder) throws {
