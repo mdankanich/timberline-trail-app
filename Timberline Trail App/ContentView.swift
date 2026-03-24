@@ -51,6 +51,7 @@ struct AppSettings: Codable, Hashable {
     var units: Units
     var mapType: MapType
     var gpsInterval: GPSInterval
+    var trackingPowerMode: TrackingPowerMode
     var autoLockEnabled: Bool
     var autoLockMinutes: AutoLockMinutes
 
@@ -59,9 +60,60 @@ struct AppSettings: Codable, Hashable {
         units: .imperial,
         mapType: .standard,
         gpsInterval: .ten,
+        trackingPowerMode: .balanced,
         autoLockEnabled: false,
         autoLockMinutes: .fifteen
     )
+
+    private enum CodingKeys: String, CodingKey {
+        case appearance
+        case units
+        case mapType
+        case gpsInterval
+        case trackingPowerMode
+        case autoLockEnabled
+        case autoLockMinutes
+    }
+
+    init(
+        appearance: AppearanceMode,
+        units: Units,
+        mapType: MapType,
+        gpsInterval: GPSInterval,
+        trackingPowerMode: TrackingPowerMode,
+        autoLockEnabled: Bool,
+        autoLockMinutes: AutoLockMinutes
+    ) {
+        self.appearance = appearance
+        self.units = units
+        self.mapType = mapType
+        self.gpsInterval = gpsInterval
+        self.trackingPowerMode = trackingPowerMode
+        self.autoLockEnabled = autoLockEnabled
+        self.autoLockMinutes = autoLockMinutes
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.appearance = try container.decodeIfPresent(AppearanceMode.self, forKey: .appearance) ?? AppSettings.default.appearance
+        self.units = try container.decodeIfPresent(Units.self, forKey: .units) ?? AppSettings.default.units
+        self.mapType = try container.decodeIfPresent(MapType.self, forKey: .mapType) ?? AppSettings.default.mapType
+        self.gpsInterval = try container.decodeIfPresent(GPSInterval.self, forKey: .gpsInterval) ?? AppSettings.default.gpsInterval
+        self.trackingPowerMode = try container.decodeIfPresent(TrackingPowerMode.self, forKey: .trackingPowerMode) ?? AppSettings.default.trackingPowerMode
+        self.autoLockEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoLockEnabled) ?? AppSettings.default.autoLockEnabled
+        self.autoLockMinutes = try container.decodeIfPresent(AutoLockMinutes.self, forKey: .autoLockMinutes) ?? AppSettings.default.autoLockMinutes
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(appearance, forKey: .appearance)
+        try container.encode(units, forKey: .units)
+        try container.encode(mapType, forKey: .mapType)
+        try container.encode(gpsInterval, forKey: .gpsInterval)
+        try container.encode(trackingPowerMode, forKey: .trackingPowerMode)
+        try container.encode(autoLockEnabled, forKey: .autoLockEnabled)
+        try container.encode(autoLockMinutes, forKey: .autoLockMinutes)
+    }
 }
 
 enum Units: String, Codable, CaseIterable, Identifiable {
@@ -89,6 +141,13 @@ enum GPSInterval: Int, Codable, CaseIterable, Identifiable {
     case ten = 10
     case thirty = 30
     var id: Int { rawValue }
+}
+
+enum TrackingPowerMode: String, Codable, CaseIterable, Identifiable {
+    case highAccuracy
+    case balanced
+    case batterySaver
+    var id: String { rawValue }
 }
 
 enum AutoLockMinutes: Int, Codable, CaseIterable, Identifiable {
@@ -1446,6 +1505,11 @@ final class HealthTrainingStore: ObservableObject {
 // MARK: - Location + Map UI
 
 final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelegate {
+    enum TrackingPurpose {
+        case general
+        case navigation
+    }
+
     @Published var authorizationStatus: CLAuthorizationStatus
     @Published var latestLocation: CLLocation?
     @Published var isTracking = false
@@ -1456,15 +1520,20 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     private let sessionsKey = "phase1_tracking_sessions"
     private var activeSession: TrackingSession?
     private var lastTrackedLocation: CLLocation?
+    private var lastTrackedTimestamp: Date?
     private var shouldStartAfterAuthorization = false
+    private var trackingPurpose: TrackingPurpose = .general
+    private var configuredInterval: GPSInterval = .ten
+    private var configuredPowerMode: TrackingPowerMode = .balanced
 
     override init() {
         self.authorizationStatus = manager.authorizationStatus
         self.sessions = []
         super.init()
         manager.delegate = self
-        manager.desiredAccuracy = kCLLocationAccuracyBest
-        manager.distanceFilter = 10
+        manager.activityType = .fitness
+        manager.pausesLocationUpdatesAutomatically = true
+        configureManagerForCurrentMode()
         loadSessions()
 
         if authorizationStatus == .authorizedAlways || authorizationStatus == .authorizedWhenInUse {
@@ -1476,7 +1545,18 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         manager.requestWhenInUseAuthorization()
     }
 
-    func startTracking() {
+    func refreshLocation() {
+        guard authorizationStatus == .authorizedAlways || authorizationStatus == .authorizedWhenInUse else { return }
+        manager.requestLocation()
+    }
+
+    func applySettings(_ settings: AppSettings) {
+        configuredInterval = settings.gpsInterval
+        configuredPowerMode = settings.trackingPowerMode
+        configureManagerForCurrentMode()
+    }
+
+    func startTracking(purpose: TrackingPurpose = .general) {
         if authorizationStatus == .notDetermined {
             shouldStartAfterAuthorization = true
             requestPermission()
@@ -1487,6 +1567,9 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
             return
         }
 
+        trackingPurpose = purpose
+        configureManagerForCurrentMode()
+
         if activeSession == nil {
             activeSession = TrackingSession(
                 id: UUID().uuidString,
@@ -1495,6 +1578,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
                 points: []
             )
             lastTrackedLocation = nil
+            lastTrackedTimestamp = nil
         }
 
         manager.startUpdatingLocation()
@@ -1506,6 +1590,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         isTracking = false
         shouldStartAfterAuthorization = false
         lastTrackedLocation = nil
+        lastTrackedTimestamp = nil
 
         guard var completed = activeSession else { return }
         completed.endedAt = Date()
@@ -1552,7 +1637,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
             manager.requestLocation()
             if shouldStartAfterAuthorization {
                 shouldStartAfterAuthorization = false
-                startTracking()
+                startTracking(purpose: trackingPurpose)
             }
             return
         }
@@ -1571,7 +1656,15 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         guard isTracking, newest.horizontalAccuracy >= 0 else { return }
         guard var session = activeSession else { return }
 
-        if let last = lastTrackedLocation, newest.distance(from: last) < 5 {
+        let minimumInterval = TimeInterval(configuredInterval.rawValue)
+        if let lastTimestamp = lastTrackedTimestamp,
+           newest.timestamp.timeIntervalSince(lastTimestamp) < minimumInterval {
+            if let last = lastTrackedLocation, newest.distance(from: last) < minimumDistanceThresholdMeters {
+                return
+            }
+        }
+
+        if let last = lastTrackedLocation, newest.distance(from: last) < minimumDistanceThresholdMeters {
             return
         }
 
@@ -1585,11 +1678,14 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         )
         activeSession = session
         lastTrackedLocation = newest
+        lastTrackedTimestamp = newest.timestamp
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        isTracking = false
-        print("Location error: \(error.localizedDescription)")
+        if isTracking {
+            isTracking = false
+            print("Location error: \(error.localizedDescription)")
+        }
     }
 
     private func loadSessions() {
@@ -1601,6 +1697,31 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     private func persistSessions() {
         guard let data = try? JSONEncoder().encode(sessions) else { return }
         defaults.set(data, forKey: sessionsKey)
+    }
+
+    private var minimumDistanceThresholdMeters: CLLocationDistance {
+        switch configuredPowerMode {
+        case .highAccuracy:
+            return trackingPurpose == .navigation ? 4 : 5
+        case .balanced:
+            return trackingPurpose == .navigation ? 8 : 10
+        case .batterySaver:
+            return trackingPurpose == .navigation ? 16 : 25
+        }
+    }
+
+    private func configureManagerForCurrentMode() {
+        switch configuredPowerMode {
+        case .highAccuracy:
+            manager.desiredAccuracy = trackingPurpose == .navigation ? kCLLocationAccuracyBest : kCLLocationAccuracyNearestTenMeters
+            manager.distanceFilter = trackingPurpose == .navigation ? 5 : 10
+        case .balanced:
+            manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
+            manager.distanceFilter = trackingPurpose == .navigation ? 12 : 20
+        case .batterySaver:
+            manager.desiredAccuracy = trackingPurpose == .navigation ? kCLLocationAccuracyHundredMeters : kCLLocationAccuracyKilometer
+            manager.distanceFilter = trackingPurpose == .navigation ? 25 : 50
+        }
     }
 }
 
@@ -1689,11 +1810,18 @@ struct TrailMapView: UIViewRepresentable {
 
 struct ContentView: View {
     @StateObject private var store = AppStore()
+    @StateObject private var locationTracker = LocationTracker()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        AppFlowCoordinatorView(store: store)
+        AppFlowCoordinatorView(store: store, locationTracker: locationTracker)
         .preferredColorScheme(colorScheme(for: store.settings.appearance))
+        .onAppear {
+            locationTracker.applySettings(store.settings)
+        }
+        .onChange(of: store.settings) { settings in
+            locationTracker.applySettings(settings)
+        }
         .onChange(of: scenePhase) { phase in
             store.handleScenePhase(phase)
         }
@@ -1925,17 +2053,18 @@ struct OnboardingView: View {
 
 struct MainTabView: View {
     @ObservedObject var store: AppStore
+    @ObservedObject var locationTracker: LocationTracker
     @AppStorage("phase3_is_premium") private var isPremium = false
 
     var body: some View {
         TabView {
-            MapHomeView(store: store)
+            MapHomeView(store: store, locationTracker: locationTracker)
                 .tabItem {
                     Label("Map", systemImage: "map")
                 }
 
             if isPremium {
-                NavigationDashboardView(store: store)
+                NavigationDashboardView(store: store, locationTracker: locationTracker)
                     .tabItem {
                         Label("Navigate", systemImage: "location.north.line")
                     }
@@ -1992,12 +2121,12 @@ struct MainTabView: View {
                     Label("Weather", systemImage: "cloud.sun")
                 }
 
-            SafetyHubView(store: store)
+            SafetyHubView(store: store, locationTracker: locationTracker)
                 .tabItem {
                     Label("Safety", systemImage: "shield")
                 }
 
-            SettingsView(store: store)
+            SettingsView(store: store, locationTracker: locationTracker)
                 .tabItem {
                     Label("Settings", systemImage: "gearshape")
                 }
@@ -2046,7 +2175,7 @@ private struct MapHomeView: View {
     }
 
     @ObservedObject var store: AppStore
-    @StateObject private var locationTracker = LocationTracker()
+    @ObservedObject var locationTracker: LocationTracker
     @State private var editingWaypoint: TrailWaypoint?
     @State private var showingAddWaypoint = false
     @State private var trailEditError: String?
@@ -2150,7 +2279,7 @@ private struct MapHomeView: View {
                 if locationTracker.isTracking {
                     locationTracker.stopTracking()
                 } else {
-                    locationTracker.startTracking()
+                    locationTracker.startTracking(purpose: .general)
                 }
             }
             .buttonStyle(.borderedProminent)
@@ -2475,7 +2604,7 @@ private struct WaypointEditorSheet: View {
 
 private struct NavigationDashboardView: View {
     @ObservedObject var store: AppStore
-    @StateObject private var locationTracker = LocationTracker()
+    @ObservedObject var locationTracker: LocationTracker
 
     private struct NavigationProgress {
         let remainingMiles: Double
@@ -2528,7 +2657,7 @@ private struct NavigationDashboardView: View {
                             if locationTracker.isTracking {
                                 locationTracker.stopTracking()
                             } else {
-                                locationTracker.startTracking()
+                                locationTracker.startTracking(purpose: .navigation)
                             }
                         }
                         .buttonStyle(.borderedProminent)
@@ -2793,7 +2922,7 @@ private struct WeatherDashboardView: View {
 private struct SafetyHubView: View {
     @ObservedObject var store: AppStore
     @StateObject private var safetyStore = SafetyStore()
-    @StateObject private var locationTracker = LocationTracker()
+    @ObservedObject var locationTracker: LocationTracker
     @State private var showingAdd = false
     @State private var draftName = ""
     @State private var draftPhone = ""
@@ -2883,8 +3012,9 @@ private struct SafetyHubView: View {
             .task {
                 if locationTracker.authorizationStatus == .notDetermined {
                     locationTracker.requestPermission()
+                } else {
+                    locationTracker.refreshLocation()
                 }
-                locationTracker.startTracking()
             }
             .onChange(of: locationTracker.latestLocation) { location in
                 guard let unwrappedLocation = location else { return }
@@ -3535,7 +3665,7 @@ private struct EditTripView: View {
 
 private struct SettingsView: View {
     @ObservedObject var store: AppStore
-    @StateObject private var locationTracker = LocationTracker()
+    @ObservedObject var locationTracker: LocationTracker
     @State private var isImportingFile = false
     @State private var pendingImportURL: URL?
     @State private var pendingImportPreview: TrailImportPreview?
@@ -3651,6 +3781,24 @@ private struct SettingsView: View {
                             Text("\(interval.rawValue) sec").tag(interval)
                         }
                     }
+                }
+
+                Section("Power Management") {
+                    Picker("Tracking Mode", selection: Binding(
+                        get: { store.settings.trackingPowerMode },
+                        set: { newValue in
+                            var copy = store.settings
+                            copy.trackingPowerMode = newValue
+                            store.updateSettings(copy)
+                        }
+                    )) {
+                        Text("High Accuracy").tag(TrackingPowerMode.highAccuracy)
+                        Text("Balanced").tag(TrackingPowerMode.balanced)
+                        Text("Battery Saver").tag(TrackingPowerMode.batterySaver)
+                    }
+                    Text("Battery Saver lowers GPS precision and update frequency to extend hiking battery life.")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
                 }
 
                 Section("Auto-Lock") {
