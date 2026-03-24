@@ -9,6 +9,7 @@ import SwiftUI
 
 struct AppFlowCoordinatorView: View {
     @ObservedObject var store: AppStore
+    @ObservedObject var locationTracker: LocationTracker
 
     var body: some View {
         switch store.flowState {
@@ -17,7 +18,7 @@ struct AppFlowCoordinatorView: View {
         case .onboardingRequired:
             OnboardingView(store: store)
         case .ready:
-            MainTabView(store: store)
+            MainTabView(store: store, locationTracker: locationTracker)
         }
     }
 }
