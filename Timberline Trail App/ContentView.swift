@@ -2060,24 +2060,8 @@ struct MainTabView: View {
         TabView {
             MapHomeView(store: store, locationTracker: locationTracker)
                 .tabItem {
-                    Label("Map", systemImage: "map")
+                    Label("Trail", systemImage: "map")
                 }
-
-            if isPremium {
-                NavigationDashboardView(store: store, locationTracker: locationTracker)
-                    .tabItem {
-                        Label("Navigate", systemImage: "location.north.line")
-                    }
-            } else {
-                PremiumGateView(
-                    featureName: "Navigation",
-                    message: "Premium unlock is required for turn-by-turn route progress and waypoint guidance.",
-                    isPremium: $isPremium
-                )
-                .tabItem {
-                    Label("Navigate", systemImage: "location.north.line")
-                }
-            }
 
             if isPremium {
                 TrainingReadinessView(store: store)
@@ -2174,12 +2158,30 @@ private struct MapHomeView: View {
         case counterclockwise
     }
 
+    private struct NavigationProgress {
+        let remainingMiles: Double
+        let traveledMiles: Double
+    }
+
+    private struct TrailPositionSnapshot {
+        let latitude: Double
+        let longitude: Double
+        let traveledMiles: Double
+        let offTrailMeters: Double
+    }
+
+    private struct NextWaypointSnapshot {
+        let waypoint: TrailWaypoint
+        let distanceToNextMiles: Double
+    }
+
     @ObservedObject var store: AppStore
     @ObservedObject var locationTracker: LocationTracker
     @State private var editingWaypoint: TrailWaypoint?
     @State private var showingAddWaypoint = false
     @State private var trailEditError: String?
     @State private var waypointDirection: WaypointDirection = .clockwise
+    @State private var isRouteSheetExpanded = false
 
     var body: some View {
         NavigationView {
@@ -2193,6 +2195,12 @@ private struct MapHomeView: View {
                 .frame(height: 300)
 
                 List {
+                    Section {
+                        routeSummarySheet
+                    } header: {
+                        Text("Route")
+                    }
+
                     Section {
                         trailRows
                     } header: {
@@ -2214,7 +2222,7 @@ private struct MapHomeView: View {
                 }
                 .listStyle(.insetGrouped)
             }
-            .navigationTitle("Home")
+            .navigationTitle("Trail")
             .navigationBarTitleDisplayMode(.large)
             .navigationBarItems(trailing: ProfileAvatarButton(store: store))
             .sheet(item: $editingWaypoint) { waypoint in
@@ -2274,21 +2282,6 @@ private struct MapHomeView: View {
                 .foregroundColor(.secondary)
         }
 
-        HStack {
-            Button(locationTracker.isTracking ? "Stop Tracking" : "Start Tracking") {
-                if locationTracker.isTracking {
-                    locationTracker.stopTracking()
-                } else {
-                    locationTracker.startTracking(purpose: .general)
-                }
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(
-                !locationTracker.isTracking &&
-                (locationTracker.authorizationStatus == .denied || locationTracker.authorizationStatus == .restricted)
-            )
-        }
-
         StatRow(label: "Saved Sessions", value: "\(locationTracker.sessions.count)")
         StatRow(label: "Saved Points", value: "\(locationTracker.totalTrackedPoints)")
         StatRow(label: "Tracked Distance", value: String(format: "%.2f mi", locationTracker.totalTrackedDistanceMiles))
@@ -2299,6 +2292,109 @@ private struct MapHomeView: View {
             }
             .buttonStyle(.bordered)
         }
+    }
+
+    @ViewBuilder
+    private var routeSummarySheet: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Spacer()
+                Capsule()
+                    .fill(Color.secondary.opacity(0.35))
+                    .frame(width: 40, height: 4)
+                Spacer()
+            }
+
+            HStack(alignment: .firstTextBaseline) {
+                Text("\(timeToNextMinutes) min")
+                    .font(.title3.bold())
+                Spacer()
+                Text("Arrive \(arrivalTimeText)")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+
+            if let next = nextWaypointSnapshot {
+                Text("To \(next.waypoint.name) • \(String(format: "%.1f mi", next.distanceToNextMiles))")
+                    .font(.subheadline)
+            } else {
+                Text("No next waypoint. Loop complete.")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+
+            HStack(spacing: 8) {
+                Button(locationTracker.isTracking ? "Stop" : "Start") {
+                    if locationTracker.isTracking {
+                        locationTracker.stopTracking()
+                    } else {
+                        locationTracker.startTracking(purpose: .navigation)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(
+                    !locationTracker.isTracking &&
+                    (locationTracker.authorizationStatus == .denied || locationTracker.authorizationStatus == .restricted)
+                )
+
+                Button(isRouteSheetExpanded ? "Hide Details" : "Details") {
+                    isRouteSheetExpanded.toggle()
+                }
+                .buttonStyle(.bordered)
+            }
+
+            if isRouteSheetExpanded {
+                Divider()
+                StatRow(label: "Permission", value: locationStatusLabel(locationTracker.authorizationStatus))
+
+                if locationTracker.authorizationStatus == .notDetermined {
+                    Button("Allow Location") {
+                        locationTracker.requestPermission()
+                    }
+                    .buttonStyle(.bordered)
+                } else if locationTracker.authorizationStatus == .denied || locationTracker.authorizationStatus == .restricted {
+                    Button("Open Settings") {
+                        #if canImport(UIKit)
+                        guard let settingsURL = URL(string: UIApplication.openSettingsURLString) else { return }
+                        UIApplication.shared.open(settingsURL)
+                        #endif
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                if let snapshot = trailPositionSnapshot {
+                    StatRow(label: "Trail Mile", value: String(format: "%.1f mi", snapshot.traveledMiles))
+                    StatRow(label: "Off Trail", value: "\(Int(snapshot.offTrailMeters.rounded())) m")
+                    StatRow(label: "Current Segment", value: segmentLabel(for: snapshot.traveledMiles))
+                } else {
+                    Text("Waiting for GPS fix.")
+                        .foregroundColor(.secondary)
+                }
+
+                if let next = nextWaypointSnapshot {
+                    StatRow(label: "Next Waypoint", value: next.waypoint.name)
+                    StatRow(label: "Distance", value: String(format: "%.1f mi", next.distanceToNextMiles))
+                    StatRow(label: "ETA @ 2.0 mph", value: String(format: "%.1f hrs", etaHours(distanceRemainingMiles: next.distanceToNextMiles)))
+                }
+
+                if let nextWater = nextWaypointSnapshot(of: .water) {
+                    StatRow(label: "Next Water", value: "\(nextWater.waypoint.name) • \(String(format: "%.1f mi", nextWater.distanceToNextMiles))")
+                } else {
+                    StatRow(label: "Next Water", value: "No water source ahead")
+                }
+
+                if let nextCamp = nextWaypointSnapshot(of: .campsite) {
+                    StatRow(label: "Next Campsite", value: "\(nextCamp.waypoint.name) • \(String(format: "%.1f mi", nextCamp.distanceToNextMiles))")
+                } else {
+                    StatRow(label: "Next Campsite", value: "No campsite ahead")
+                }
+
+                if let progress = navigationProgress {
+                    StatRow(label: "Distance Remaining", value: String(format: "%.1f mi", progress.remainingMiles))
+                }
+            }
+        }
+        .padding(.vertical, 2)
     }
 
     @ViewBuilder
@@ -2437,6 +2533,86 @@ private struct MapHomeView: View {
         return route.reduce(Double.greatestFiniteMagnitude) { best, point in
             let distance = current.distance(from: CLLocation(latitude: point.latitude, longitude: point.longitude))
             return min(best, distance)
+        }
+    }
+
+    private var navigationProgress: NavigationProgress? {
+        guard let location = locationTracker.latestLocation else { return nil }
+        let nearest = nearestRouteIndex(
+            route: store.activeTrailCoordinates,
+            userLocation: location.coordinate,
+            lastIndex: nil,
+            windowRadius: 25
+        )
+        let remaining = distanceRemainingMiles(route: store.activeTrailCoordinates, nearestIndex: nearest)
+        let traveled = max(0, store.activeTrailDistanceMiles - remaining)
+        return NavigationProgress(remainingMiles: remaining, traveledMiles: traveled)
+    }
+
+    private var trailPositionSnapshot: TrailPositionSnapshot? {
+        guard let location = locationTracker.latestLocation else { return nil }
+        guard let progress = navigationProgress else { return nil }
+        let offTrail = distanceToTrailMeters(from: location.coordinate)
+        return TrailPositionSnapshot(
+            latitude: location.coordinate.latitude,
+            longitude: location.coordinate.longitude,
+            traveledMiles: progress.traveledMiles,
+            offTrailMeters: offTrail
+        )
+    }
+
+    private var nextWaypointSnapshot: NextWaypointSnapshot? {
+        guard let progress = navigationProgress else { return nil }
+        guard let next = nextWaypoint(distanceFromStartMiles: progress.traveledMiles, waypoints: store.activeTrailWaypoints) else { return nil }
+        return NextWaypointSnapshot(
+            waypoint: next,
+            distanceToNextMiles: max(0, next.distanceFromStart - progress.traveledMiles)
+        )
+    }
+
+    private func nextWaypointSnapshot(of type: TrailWaypointType) -> NextWaypointSnapshot? {
+        guard let progress = navigationProgress else { return nil }
+        guard let next = store.activeTrailWaypoints
+            .filter({ $0.type == type && $0.distanceFromStart > progress.traveledMiles })
+            .sorted(by: { $0.distanceFromStart < $1.distanceFromStart })
+            .first else { return nil }
+        return NextWaypointSnapshot(
+            waypoint: next,
+            distanceToNextMiles: max(0, next.distanceFromStart - progress.traveledMiles)
+        )
+    }
+
+    private var timeToNextMinutes: Int {
+        guard let next = nextWaypointSnapshot else { return 0 }
+        return max(0, Int((etaHours(distanceRemainingMiles: next.distanceToNextMiles) * 60).rounded()))
+    }
+
+    private var arrivalTimeText: String {
+        guard let next = nextWaypointSnapshot else { return "--:--" }
+        let seconds = etaHours(distanceRemainingMiles: next.distanceToNextMiles) * 3600
+        let arrival = Date().addingTimeInterval(seconds)
+        return arrival.formatted(date: .omitted, time: .shortened)
+    }
+
+    private func segmentLabel(for miles: Double) -> String {
+        if miles < 3.5 { return "Timberline Lodge -> Paradise Park" }
+        if miles < 16.8 { return "Paradise Park -> Cairn Basin" }
+        if miles < 26.5 { return "Cairn Basin -> Cloud Cap" }
+        return "Cloud Cap -> Timberline Lodge"
+    }
+
+    private func locationStatusLabel(_ status: CLAuthorizationStatus) -> String {
+        switch status {
+        case .authorizedAlways, .authorizedWhenInUse:
+            return "Granted"
+        case .notDetermined:
+            return "Not Determined"
+        case .restricted:
+            return "Restricted"
+        case .denied:
+            return "Denied"
+        @unknown default:
+            return "Unknown"
         }
     }
 }
