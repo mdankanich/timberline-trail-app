@@ -35,6 +35,44 @@ struct UserProfile: Codable, Hashable {
     var photoURI: String? = nil
     var email: String? = nil
     var phone: String? = nil
+    var role: UserRole = .user
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case photoURI
+        case email
+        case phone
+        case role
+    }
+
+    init(
+        name: String,
+        photoURI: String? = nil,
+        email: String? = nil,
+        phone: String? = nil,
+        role: UserRole = .user
+    ) {
+        self.name = name
+        self.photoURI = photoURI
+        self.email = email
+        self.phone = phone
+        self.role = role
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.name = try container.decode(String.self, forKey: .name)
+        self.photoURI = try container.decodeIfPresent(String.self, forKey: .photoURI)
+        self.email = try container.decodeIfPresent(String.self, forKey: .email)
+        self.phone = try container.decodeIfPresent(String.self, forKey: .phone)
+        self.role = try container.decodeIfPresent(UserRole.self, forKey: .role) ?? .user
+    }
+}
+
+enum UserRole: String, Codable, CaseIterable, Identifiable {
+    case user
+    case admin
+    var id: String { rawValue }
 }
 
 struct AuthSession: Codable, Hashable {
@@ -1739,6 +1777,7 @@ struct TrailMapView: UIViewRepresentable {
     let waypoints: [TrailWaypoint]
     let userLocation: CLLocation?
     let mapType: MapType
+    var onWaypointSelected: ((TrailWaypoint) -> Void)? = nil
 
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView(frame: .zero)
@@ -1750,11 +1789,12 @@ struct TrailMapView: UIViewRepresentable {
     }
 
     func updateUIView(_ mapView: MKMapView, context: Context) {
+        context.coordinator.parent = self
         configure(mapView)
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator()
+        Coordinator(parent: self)
     }
 
     private func configure(_ mapView: MKMapView) {
@@ -1770,7 +1810,7 @@ struct TrailMapView: UIViewRepresentable {
 
         for waypoint in waypoints {
             guard let latitude = waypoint.latitude, let longitude = waypoint.longitude else { continue }
-            let annotation = MKPointAnnotation()
+            let annotation = WaypointAnnotation(waypoint: waypoint)
             annotation.coordinate = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
             annotation.title = waypoint.name
             annotation.subtitle = "Mile \(String(format: "%.1f", waypoint.distanceFromStart))"
@@ -1802,7 +1842,22 @@ struct TrailMapView: UIViewRepresentable {
         }
     }
 
+    private final class WaypointAnnotation: MKPointAnnotation {
+        let waypoint: TrailWaypoint
+
+        init(waypoint: TrailWaypoint) {
+            self.waypoint = waypoint
+            super.init()
+        }
+    }
+
     final class Coordinator: NSObject, MKMapViewDelegate {
+        var parent: TrailMapView
+
+        init(parent: TrailMapView) {
+            self.parent = parent
+        }
+
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             guard let polyline = overlay as? MKPolyline else {
                 return MKOverlayRenderer(overlay: overlay)
@@ -1811,6 +1866,50 @@ struct TrailMapView: UIViewRepresentable {
             renderer.strokeColor = UIColor.systemGreen
             renderer.lineWidth = 4
             return renderer
+        }
+
+        func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            if annotation is MKUserLocation { return nil }
+            guard let waypointAnnotation = annotation as? WaypointAnnotation else { return nil }
+
+            let id = "trail_waypoint_marker"
+            let view = (mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView)
+                ?? MKMarkerAnnotationView(annotation: annotation, reuseIdentifier: id)
+            view.annotation = annotation
+            view.canShowCallout = true
+            view.clusteringIdentifier = nil
+
+            let style = markerStyle(for: waypointAnnotation.waypoint.type)
+            view.markerTintColor = style.tint
+            view.glyphImage = UIImage(systemName: style.symbol)
+            view.glyphTintColor = .white
+            return view
+        }
+
+        func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
+            guard let waypointAnnotation = view.annotation as? WaypointAnnotation else { return }
+            parent.onWaypointSelected?(waypointAnnotation.waypoint)
+        }
+
+        private func markerStyle(for type: TrailWaypointType) -> (symbol: String, tint: UIColor) {
+            switch type {
+            case .trailhead:
+                return ("flag.fill", .systemBlue)
+            case .campsite:
+                return ("tent.fill", .systemIndigo)
+            case .water:
+                return ("drop.fill", .systemTeal)
+            case .viewpoint:
+                return ("binoculars.fill", .systemPurple)
+            case .junction:
+                return ("arrow.triangle.branch", .systemGray)
+            case .crossing:
+                return ("exclamationmark.triangle.fill", .systemOrange)
+            case .shelter:
+                return ("house.fill", .systemBrown)
+            case .waypoint:
+                return ("mappin", .systemPink)
+            }
         }
     }
 }
@@ -2196,6 +2295,7 @@ private struct MapHomeView: View {
     @State private var trailEditError: String?
     @State private var waypointDirection: WaypointDirection = .clockwise
     @State private var isRouteSheetExpanded = false
+    @State private var selectedMapWaypoint: TrailWaypoint?
     @GestureState private var routeSheetDragY: CGFloat = 0
 
     var body: some View {
@@ -2205,7 +2305,10 @@ private struct MapHomeView: View {
                     route: store.activeTrailCoordinates,
                     waypoints: store.activeTrailWaypoints,
                     userLocation: locationTracker.latestLocation,
-                    mapType: store.settings.mapType
+                    mapType: store.settings.mapType,
+                    onWaypointSelected: { waypoint in
+                        selectedMapWaypoint = waypoint
+                    }
                 )
                 .frame(height: 300)
 
@@ -2257,6 +2360,22 @@ private struct MapHomeView: View {
                 ) { message in
                     trailEditError = message
                 }
+            }
+            .sheet(item: $selectedMapWaypoint) { waypoint in
+                WaypointDetailOverlayView(
+                    waypoint: waypoint,
+                    segmentToNextMiles: segmentToNextDistance(for: waypoint),
+                    canEditAtCurrentLocation: canEditWaypoint(waypoint),
+                    canAddAtCurrentLocation: canAddWaypoint,
+                    onEdit: { selected in
+                        selectedMapWaypoint = nil
+                        editingWaypoint = selected
+                    },
+                    onAddAtCurrentLocation: {
+                        selectedMapWaypoint = nil
+                        showingAddWaypoint = true
+                    }
+                )
             }
         }
         .navigationViewStyle(.stack)
@@ -2586,6 +2705,7 @@ private struct MapHomeView: View {
 
     private func addWaypointBlockedReason() -> String {
         if store.session == nil { return "Sign in to add waypoints." }
+        if store.profile?.role != .admin { return "Admin role is required to add waypoints." }
         if store.importedTrailData == nil { return "Import a GPX trail first." }
         guard let location = locationTracker.latestLocation else { return "GPS location is required." }
         let distance = distanceToTrailMeters(from: location.coordinate)
@@ -2791,6 +2911,13 @@ private struct MapHomeView: View {
         if gain == 0 && loss == 0 { return nil }
         return ElevationSegment(gainFeet: Int(gain.rounded()), lossFeet: Int(loss.rounded()))
     }
+
+    private func segmentToNextDistance(for waypoint: TrailWaypoint) -> Double? {
+        let ordered = store.activeTrailWaypoints.sorted { $0.distanceFromStart < $1.distanceFromStart }
+        guard let index = ordered.firstIndex(where: { $0.id == waypoint.id }) else { return nil }
+        guard index + 1 < ordered.count else { return nil }
+        return max(0, ordered[index + 1].distanceFromStart - waypoint.distanceFromStart)
+    }
 }
 
 private struct WaypointEditorSheet: View {
@@ -2951,6 +3078,84 @@ private struct WaypointEditorSheet: View {
             let dist = current.distance(from: CLLocation(latitude: point.latitude, longitude: point.longitude))
             return min(best, dist)
         }
+    }
+}
+
+private struct WaypointDetailOverlayView: View {
+    @Environment(\.dismiss) private var dismiss
+    let waypoint: TrailWaypoint
+    let segmentToNextMiles: Double?
+    let canEditAtCurrentLocation: Bool
+    let canAddAtCurrentLocation: Bool
+    let onEdit: (TrailWaypoint) -> Void
+    let onAddAtCurrentLocation: () -> Void
+
+    var body: some View {
+        NavigationView {
+            List {
+                Section("Overview") {
+                    StatRow(label: "Name", value: waypoint.name)
+                    StatRow(label: "Type", value: waypoint.type.rawValue.capitalized)
+                    StatRow(label: "From Start", value: String(format: "%.1f mi", waypoint.distanceFromStart))
+                    StatRow(label: "To Next", value: segmentToNextMiles.map { String(format: "%.1f mi", $0) } ?? "End")
+                }
+
+                if let danger = waypoint.dangerLevel {
+                    Section("Hazard") {
+                        Text(danger.rawValue.capitalized)
+                            .foregroundColor(danger == .high ? .red : (danger == .medium ? .orange : .secondary))
+                    }
+                }
+
+                if let summary = waypoint.summary, !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Section("Notes") {
+                        Text(summary)
+                    }
+                }
+
+                Section("Location") {
+                    StatRow(label: "Latitude", value: waypoint.latitude.map { String(format: "%.5f", $0) } ?? "--")
+                    StatRow(label: "Longitude", value: waypoint.longitude.map { String(format: "%.5f", $0) } ?? "--")
+                }
+
+                Section("Actions") {
+                    Button("Edit Waypoint") {
+                        dismiss()
+                        onEdit(waypoint)
+                    }
+                    .disabled(!canEditAtCurrentLocation)
+
+                    if !canEditAtCurrentLocation {
+                        Text("Move within 100m of this waypoint to edit.")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                    }
+
+                    Button("Add Waypoint At Current Location") {
+                        dismiss()
+                        onAddAtCurrentLocation()
+                    }
+                    .disabled(!canAddAtCurrentLocation)
+
+                    if !canAddAtCurrentLocation {
+                        Text("Move within 120m of trail to add a waypoint.")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Waypoint")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .navigationViewStyle(.stack)
     }
 }
 
@@ -3855,6 +4060,9 @@ private struct SettingsView: View {
                                 )
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(store.profile?.name ?? "Hiker")
+                                Text((store.profile?.role ?? .user).rawValue.capitalized)
+                                    .font(.caption2)
+                                    .foregroundColor((store.profile?.role ?? .user) == .admin ? .orange : .secondary)
                                 if let displayEmail = (store.profile?.email ?? store.session?.email)?
                                     .trimmingCharacters(in: .whitespacesAndNewlines),
                                    !displayEmail.isEmpty {
@@ -4135,6 +4343,7 @@ private struct ProfileView: View {
     @State private var draftName = ""
     @State private var draftEmail = ""
     @State private var draftPhone = ""
+    @State private var draftRole: UserRole = .user
     @State private var draftPhotoURI: String?
     @State private var selectedImage: UIImage?
     @State private var showingImagePicker = false
@@ -4166,6 +4375,10 @@ private struct ProfileView: View {
                     .disableAutocorrection(true)
                 TextField("Phone", text: $draftPhone)
                     .keyboardType(.phonePad)
+                Picker("Role", selection: $draftRole) {
+                    Text("User").tag(UserRole.user)
+                    Text("Admin").tag(UserRole.admin)
+                }
             }
 
             Section {
@@ -4175,7 +4388,8 @@ private struct ProfileView: View {
                         name: draftName,
                         photoURI: finalPhotoURI,
                         email: normalizedField(draftEmail),
-                        phone: normalizedField(draftPhone)
+                        phone: normalizedField(draftPhone),
+                        role: draftRole
                     )
                     dismiss()
                 }
@@ -4195,6 +4409,7 @@ private struct ProfileView: View {
             draftName = store.profile?.name ?? ""
             draftEmail = store.profile?.email ?? store.session?.email ?? ""
             draftPhone = store.profile?.phone ?? ""
+            draftRole = store.profile?.role ?? .user
             draftPhotoURI = store.profile?.photoURI
         }
         .sheet(isPresented: $showingImagePicker) {
