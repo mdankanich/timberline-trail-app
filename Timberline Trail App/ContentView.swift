@@ -162,6 +162,7 @@ struct TrailCoordinate: Identifiable, Codable, Hashable {
     var id = UUID()
     let latitude: Double
     let longitude: Double
+    var elevationFeet: Double? = nil
 }
 
 struct TrackPoint: Identifiable, Codable, Hashable {
@@ -488,6 +489,10 @@ private func metersToFeet(_ value: Double) -> Int {
     Int((value * 3.28084).rounded())
 }
 
+private func metersToFeetDouble(_ value: Double) -> Double {
+    value * 3.28084
+}
+
 private func haversineMeters(
     latitude1: Double,
     longitude1: Double,
@@ -657,7 +662,11 @@ func importedTrailDataFromGPX(xml: String, fileName: String) throws -> ImportedT
     rawWaypoints.sort { $0.distanceFromStart < $1.distanceFromStart }
 
     let coordinates = trackPoints.map {
-        TrailCoordinate(latitude: roundValue($0.latitude, decimals: 6), longitude: roundValue($0.longitude, decimals: 6))
+        TrailCoordinate(
+            latitude: roundValue($0.latitude, decimals: 6),
+            longitude: roundValue($0.longitude, decimals: 6),
+            elevationFeet: roundValue(metersToFeetDouble($0.elevation), decimals: 1)
+        )
     }
 
     let waterSources = rawWaypoints
@@ -2175,6 +2184,11 @@ private struct MapHomeView: View {
         let distanceToNextMiles: Double
     }
 
+    private struct ElevationSegment {
+        let gainFeet: Int
+        let lossFeet: Int
+    }
+
     @ObservedObject var store: AppStore
     @ObservedObject var locationTracker: LocationTracker
     @State private var editingWaypoint: TrailWaypoint?
@@ -2182,6 +2196,7 @@ private struct MapHomeView: View {
     @State private var trailEditError: String?
     @State private var waypointDirection: WaypointDirection = .clockwise
     @State private var isRouteSheetExpanded = false
+    @GestureState private var routeSheetDragY: CGFloat = 0
 
     var body: some View {
         NavigationView {
@@ -2304,6 +2319,7 @@ private struct MapHomeView: View {
                     .frame(width: 40, height: 4)
                 Spacer()
             }
+            .padding(.top, 2)
 
             HStack(alignment: .firstTextBaseline) {
                 Text("\(timeToNextMinutes) min")
@@ -2319,8 +2335,23 @@ private struct MapHomeView: View {
                     .font(.subheadline)
             } else {
                 Text("No next waypoint. Loop complete.")
-                    .font(.subheadline)
+                .font(.subheadline)
                     .foregroundColor(.secondary)
+            }
+
+            HStack(spacing: 8) {
+                routeMetricChip(
+                    title: "On Trail",
+                    value: trailPositionSnapshot.map { $0.offTrailMeters <= 120 ? "Yes" : "No" } ?? "--"
+                )
+                routeMetricChip(
+                    title: "Off Trail",
+                    value: trailPositionSnapshot.map { "\(Int($0.offTrailMeters.rounded()))m" } ?? "--"
+                )
+                routeMetricChip(
+                    title: "Remain",
+                    value: navigationProgress.map { String(format: "%.1f mi", $0.remainingMiles) } ?? "--"
+                )
             }
 
             HStack(spacing: 8) {
@@ -2337,8 +2368,10 @@ private struct MapHomeView: View {
                     (locationTracker.authorizationStatus == .denied || locationTracker.authorizationStatus == .restricted)
                 )
 
-                Button(isRouteSheetExpanded ? "Hide Details" : "Details") {
-                    isRouteSheetExpanded.toggle()
+                Button(isRouteSheetExpanded ? "Collapse" : "Expand") {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
+                        isRouteSheetExpanded.toggle()
+                    }
                 }
                 .buttonStyle(.bordered)
             }
@@ -2375,16 +2408,27 @@ private struct MapHomeView: View {
                     StatRow(label: "Next Waypoint", value: next.waypoint.name)
                     StatRow(label: "Distance", value: String(format: "%.1f mi", next.distanceToNextMiles))
                     StatRow(label: "ETA @ 2.0 mph", value: String(format: "%.1f hrs", etaHours(distanceRemainingMiles: next.distanceToNextMiles)))
+                    if let elevation = elevationSegment(to: next.waypoint) {
+                        StatRow(label: "Asc/Desc To Next", value: "+\(elevation.gainFeet) / -\(elevation.lossFeet) ft")
+                    } else {
+                        StatRow(label: "Asc/Desc To Next", value: "Elevation data unavailable")
+                    }
                 }
 
                 if let nextWater = nextWaypointSnapshot(of: .water) {
                     StatRow(label: "Next Water", value: "\(nextWater.waypoint.name) • \(String(format: "%.1f mi", nextWater.distanceToNextMiles))")
+                    if let elevation = elevationSegment(to: nextWater.waypoint) {
+                        StatRow(label: "Asc/Desc To Water", value: "+\(elevation.gainFeet) / -\(elevation.lossFeet) ft")
+                    }
                 } else {
                     StatRow(label: "Next Water", value: "No water source ahead")
                 }
 
                 if let nextCamp = nextWaypointSnapshot(of: .campsite) {
                     StatRow(label: "Next Campsite", value: "\(nextCamp.waypoint.name) • \(String(format: "%.1f mi", nextCamp.distanceToNextMiles))")
+                    if let elevation = elevationSegment(to: nextCamp.waypoint) {
+                        StatRow(label: "Asc/Desc To Camp", value: "+\(elevation.gainFeet) / -\(elevation.lossFeet) ft")
+                    }
                 } else {
                     StatRow(label: "Next Campsite", value: "No campsite ahead")
                 }
@@ -2394,7 +2438,42 @@ private struct MapHomeView: View {
                 }
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 4)
+        .offset(y: min(0, routeSheetDragY * 0.15))
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 12)
+                .updating($routeSheetDragY) { value, state, _ in
+                    state = value.translation.height
+                }
+                .onEnded { value in
+                    let threshold: CGFloat = 28
+                    if value.translation.height < -threshold {
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                            isRouteSheetExpanded = true
+                        }
+                    } else if value.translation.height > threshold {
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                            isRouteSheetExpanded = false
+                        }
+                    }
+                }
+        )
+    }
+
+    private func routeMetricChip(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+            Text(value)
+                .font(.caption.bold())
+                .foregroundColor(.primary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Color(UIColor.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     @ViewBuilder
@@ -2614,6 +2693,57 @@ private struct MapHomeView: View {
         @unknown default:
             return "Unknown"
         }
+    }
+
+    private func elevationSegment(to waypoint: TrailWaypoint) -> ElevationSegment? {
+        guard
+            let userLocation = locationTracker.latestLocation?.coordinate,
+            let targetLatitude = waypoint.latitude,
+            let targetLongitude = waypoint.longitude,
+            !store.activeTrailCoordinates.isEmpty
+        else { return nil }
+
+        let route = store.activeTrailCoordinates
+        let startIndex = nearestRouteIndex(route: route, userLocation: userLocation, lastIndex: nil, windowRadius: 25)
+        let targetIndex = nearestRouteIndex(
+            route: route,
+            userLocation: CLLocationCoordinate2D(latitude: targetLatitude, longitude: targetLongitude),
+            lastIndex: nil,
+            windowRadius: 25
+        )
+
+        if startIndex == targetIndex { return ElevationSegment(gainFeet: 0, lossFeet: 0) }
+
+        let ascending = startIndex < targetIndex
+        let lower = min(startIndex, targetIndex)
+        let upper = max(startIndex, targetIndex)
+        if upper - lower < 1 { return nil }
+
+        var gain = 0.0
+        var loss = 0.0
+
+        if ascending {
+            for index in lower..<upper {
+                guard
+                    let fromElevation = route[index].elevationFeet,
+                    let toElevation = route[index + 1].elevationFeet
+                else { continue }
+                let delta = toElevation - fromElevation
+                if delta > 0 { gain += delta } else { loss += abs(delta) }
+            }
+        } else {
+            for index in stride(from: upper, to: lower, by: -1) {
+                guard
+                    let fromElevation = route[index].elevationFeet,
+                    let toElevation = route[index - 1].elevationFeet
+                else { continue }
+                let delta = toElevation - fromElevation
+                if delta > 0 { gain += delta } else { loss += abs(delta) }
+            }
+        }
+
+        if gain == 0 && loss == 0 { return nil }
+        return ElevationSegment(gainFeet: Int(gain.rounded()), lossFeet: Int(loss.rounded()))
     }
 }
 
