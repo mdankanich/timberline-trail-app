@@ -160,7 +160,8 @@ final class AppStore: ObservableObject {
                         name: fullName,
                         photoURI: profile?.photoURI,
                         email: profile?.email ?? credential.email ?? session?.email,
-                        phone: profile?.phone
+                        phone: profile?.phone,
+                        role: profile?.role ?? .user
                     )
                     profile = newProfile
                     userService.saveLocalProfile(newProfile)
@@ -173,7 +174,8 @@ final class AppStore: ObservableObject {
                         name: fallback,
                         photoURI: nil,
                         email: credential.email ?? session?.email,
-                        phone: nil
+                        phone: nil,
+                        role: .user
                     )
                     profile = newProfile
                     userService.saveLocalProfile(newProfile)
@@ -240,7 +242,8 @@ final class AppStore: ObservableObject {
             name: trimmed,
             photoURI: profile?.photoURI,
             email: profile?.email ?? session?.email,
-            phone: profile?.phone
+            phone: profile?.phone,
+            role: profile?.role ?? .user
         )
         profile = nextProfile
         userService.saveLocalProfile(nextProfile)
@@ -248,7 +251,13 @@ final class AppStore: ObservableObject {
         refreshFlowState()
     }
 
-    func updateProfile(name: String, photoURI: String? = nil, email: String? = nil, phone: String? = nil) {
+    func updateProfile(
+        name: String,
+        photoURI: String? = nil,
+        email: String? = nil,
+        phone: String? = nil,
+        role: UserRole? = nil
+    ) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let normalizedEmail = normalizeOptionalField(email) ?? normalizeOptionalField(profile?.email) ?? session?.email
@@ -257,7 +266,8 @@ final class AppStore: ObservableObject {
             name: trimmed,
             photoURI: photoURI ?? profile?.photoURI,
             email: normalizedEmail,
-            phone: normalizedPhone
+            phone: normalizedPhone,
+            role: role ?? profile?.role ?? .user
         )
         profile = next
         userService.saveLocalProfile(next)
@@ -370,7 +380,7 @@ final class AppStore: ObservableObject {
     }
 
     func canEditWaypoints() -> Bool {
-        session != nil && importedTrailData != nil
+        session != nil && importedTrailData != nil && profile?.role == .admin
     }
 
     func updateWaypoint(
@@ -382,7 +392,7 @@ final class AppStore: ObservableObject {
         editorName: String
     ) throws {
         guard canEditWaypoints(), var imported = importedTrailData else {
-            throw NSError(domain: "TrailImport", code: 20, userInfo: [NSLocalizedDescriptionKey: "Sign in and import a GPX trail before editing waypoints."])
+            throw NSError(domain: "TrailImport", code: 20, userInfo: [NSLocalizedDescriptionKey: "Admin role and imported GPX trail are required before editing waypoints."])
         }
         guard let index = imported.waypoints.firstIndex(where: { $0.id == id }) else {
             throw NSError(domain: "TrailImport", code: 21, userInfo: [NSLocalizedDescriptionKey: "Waypoint not found."])
@@ -412,7 +422,7 @@ final class AppStore: ObservableObject {
         editorName: String
     ) throws {
         guard canEditWaypoints(), var imported = importedTrailData else {
-            throw NSError(domain: "TrailImport", code: 22, userInfo: [NSLocalizedDescriptionKey: "Sign in and import a GPX trail before adding waypoints."])
+            throw NSError(domain: "TrailImport", code: 22, userInfo: [NSLocalizedDescriptionKey: "Admin role and imported GPX trail are required before adding waypoints."])
         }
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else {
