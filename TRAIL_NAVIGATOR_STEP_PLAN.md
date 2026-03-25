@@ -13,7 +13,10 @@ For each step:
 ## Current Status
 - Step 1: Completed and pushed
 - Step 2: Completed and pushed
-- Step 3+: Pending
+- Step 3: Completed and pushed
+- Step 4: Completed and pushed
+- Step 5: Completed locally (pending commit/push)
+- Step 6: Completed locally (pending commit/push)
 
 ## Step 1 (Completed)
 Merge Map and Navigate into a single primary `Trail` tab.
@@ -32,7 +35,7 @@ Add Google-like route summary panel (expandable details).
 
 Done in commit: `5501899`
 
-## Step 3 (Next)
+## Step 3 (Completed)
 Add elevation segment metrics to next targets.
 - Elevation gain/loss to next waypoint.
 - Elevation gain/loss to next water/campsite.
@@ -42,7 +45,9 @@ Acceptance:
 - Values update with live position.
 - No crashes when elevation data is sparse.
 
-## Step 4
+Status: Implemented (local and pushed in prior cycle)
+
+## Step 4 (Completed)
 Bottom-sheet interaction polish.
 - Better hierarchy for summary/details.
 - Improved spacing and readability.
@@ -52,7 +57,9 @@ Acceptance:
 - Smooth interaction on device.
 - Clear primary hiking actions.
 
-## Step 5
+Status: Implemented (local and pushed in prior cycle)
+
+## Step 5 (Completed Locally)
 Proactive hiking alerts.
 - Off-trail warning threshold.
 - Next water/camp reminders by distance/time.
@@ -62,7 +69,9 @@ Acceptance:
 - Alerts are informative, not noisy.
 - Works offline using local trail + GPS.
 
-## Step 6
+Status: Implemented locally (route panel now shows off-trail, water/camp, and steep-climb alerts)
+
+## Step 6 (Completed Locally)
 Cleanup + QA + release prep.
 - Remove/reconcile unused legacy navigation code paths.
 - Device testing matrix (offline, denied location, no GPX, active hike).
@@ -72,6 +81,8 @@ Acceptance:
 - Build green.
 - Core hike flow verified on device.
 
+Status: Implemented locally (legacy standalone navigation screen removed, plan updated; final device QA still recommended)
+
 ## Per-Step Checklist Template
 Use this for each next step:
 - [ ] Implement scoped changes
@@ -80,4 +91,3 @@ Use this for each next step:
 - [ ] Smoke test key flow
 - [ ] Commit with clear message
 - [ ] Push to `feature/gpx-import-clean-2026-03-19`
-
