@@ -2339,6 +2339,19 @@ private struct MapHomeView: View {
                     .foregroundColor(.secondary)
             }
 
+            if !proactiveAlerts.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(proactiveAlerts, id: \.self) { alert in
+                        Label(alert, systemImage: "exclamationmark.triangle.fill")
+                            .font(.footnote)
+                            .foregroundColor(.orange)
+                    }
+                }
+                .padding(10)
+                .background(Color.orange.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+
             HStack(spacing: 8) {
                 routeMetricChip(
                     title: "On Trail",
@@ -2673,6 +2686,39 @@ private struct MapHomeView: View {
         return arrival.formatted(date: .omitted, time: .shortened)
     }
 
+    private var proactiveAlerts: [String] {
+        var alerts: [String] = []
+
+        if let offTrail = trailPositionSnapshot?.offTrailMeters, offTrail > 120 {
+            alerts.append("Off trail by \(Int(offTrail.rounded()))m. Move back to the route.")
+        }
+
+        if let nextWater = nextWaypointSnapshot(of: .water) {
+            let etaMinutes = Int((etaHours(distanceRemainingMiles: nextWater.distanceToNextMiles) * 60).rounded())
+            if nextWater.distanceToNextMiles <= 1.0 || etaMinutes <= 30 {
+                alerts.append("Water ahead in \(String(format: "%.1f", nextWater.distanceToNextMiles)) mi (~\(etaMinutes)m).")
+            }
+        }
+
+        if let nextCamp = nextWaypointSnapshot(of: .campsite) {
+            let etaMinutes = Int((etaHours(distanceRemainingMiles: nextCamp.distanceToNextMiles) * 60).rounded())
+            if nextCamp.distanceToNextMiles <= 2.0 || etaMinutes <= 60 {
+                alerts.append("Campsite ahead in \(String(format: "%.1f", nextCamp.distanceToNextMiles)) mi (~\(etaMinutes)m).")
+            }
+        }
+
+        if let next = nextWaypointSnapshot,
+           let elevation = elevationSegment(to: next.waypoint) {
+            let miles = max(next.distanceToNextMiles, 0.1)
+            let gainPerMile = Double(elevation.gainFeet) / miles
+            if gainPerMile >= 800 {
+                alerts.append("Steep climb ahead: +\(elevation.gainFeet) ft over \(String(format: "%.1f", next.distanceToNextMiles)) mi.")
+            }
+        }
+
+        return alerts
+    }
+
     private func segmentLabel(for miles: Double) -> String {
         if miles < 3.5 { return "Timberline Lodge -> Paradise Park" }
         if miles < 16.8 { return "Paradise Park -> Cairn Basin" }
@@ -2904,193 +2950,6 @@ private struct WaypointEditorSheet: View {
         return route.reduce(Double.greatestFiniteMagnitude) { best, point in
             let dist = current.distance(from: CLLocation(latitude: point.latitude, longitude: point.longitude))
             return min(best, dist)
-        }
-    }
-}
-
-private struct NavigationDashboardView: View {
-    @ObservedObject var store: AppStore
-    @ObservedObject var locationTracker: LocationTracker
-
-    private struct NavigationProgress {
-        let remainingMiles: Double
-        let traveledMiles: Double
-    }
-
-    private struct TrailPositionSnapshot {
-        let latitude: Double
-        let longitude: Double
-        let traveledMiles: Double
-        let offTrailMeters: Double
-    }
-
-    private struct NextWaypointSnapshot {
-        let waypoint: TrailWaypoint
-        let distanceToNextMiles: Double
-    }
-
-    var body: some View {
-        NavigationView {
-            VStack(spacing: 0) {
-                TrailMapView(
-                    route: store.activeTrailCoordinates,
-                    waypoints: store.activeTrailWaypoints,
-                    userLocation: locationTracker.latestLocation,
-                    mapType: store.settings.mapType
-                )
-                .frame(height: 300)
-
-                List {
-                    Section("Navigation") {
-                        StatRow(label: "Permission", value: locationStatusLabel(locationTracker.authorizationStatus))
-
-                        if locationTracker.authorizationStatus == .notDetermined {
-                            Button("Allow Location") {
-                                locationTracker.requestPermission()
-                            }
-                            .buttonStyle(.bordered)
-                        } else if locationTracker.authorizationStatus == .denied || locationTracker.authorizationStatus == .restricted {
-                            Button("Open Settings") {
-                                #if canImport(UIKit)
-                                guard let settingsURL = URL(string: UIApplication.openSettingsURLString) else { return }
-                                UIApplication.shared.open(settingsURL)
-                                #endif
-                            }
-                            .buttonStyle(.bordered)
-                        }
-
-                        Button(locationTracker.isTracking ? "Stop Navigation Tracking" : "Start Navigation Tracking") {
-                            if locationTracker.isTracking {
-                                locationTracker.stopTracking()
-                            } else {
-                                locationTracker.startTracking(purpose: .navigation)
-                            }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(
-                            !locationTracker.isTracking &&
-                            (locationTracker.authorizationStatus == .denied || locationTracker.authorizationStatus == .restricted)
-                        )
-                    }
-
-                    Section("Trail Position") {
-                        if let snapshot = trailPositionSnapshot {
-                            StatRow(label: "Lat", value: String(format: "%.5f", snapshot.latitude))
-                            StatRow(label: "Lon", value: String(format: "%.5f", snapshot.longitude))
-                            StatRow(label: "Trail Mile", value: String(format: "%.1f mi", snapshot.traveledMiles))
-                            StatRow(label: "Distance Off Trail", value: "\(Int(snapshot.offTrailMeters.rounded())) m")
-                            StatRow(label: "On Trail", value: snapshot.offTrailMeters <= 120 ? "Yes" : "No")
-                            StatRow(label: "Current Segment", value: segmentLabel(for: snapshot.traveledMiles))
-                        } else {
-                            Text("Waiting for GPS fix.")
-                                .foregroundColor(.secondary)
-                        }
-                    }
-
-                    Section("Next Waypoint") {
-                        if let next = nextWaypointSnapshot {
-                            StatRow(label: "Name", value: next.waypoint.name)
-                            StatRow(label: "Distance To Next", value: String(format: "%.1f mi", next.distanceToNextMiles))
-                            StatRow(label: "ETA @ 2.0 mph", value: String(format: "%.1f hrs", etaHours(distanceRemainingMiles: next.distanceToNextMiles)))
-                        } else {
-                            StatRow(label: "Status", value: "Loop complete")
-                        }
-                    }
-
-                    Section("Progress") {
-                        if let progress = navigationProgress {
-                            StatRow(label: "Distance Remaining", value: String(format: "%.1f mi", progress.remainingMiles))
-                        } else {
-                            Text("Waiting for GPS fix.")
-                                .foregroundColor(.secondary)
-                        }
-                    }
-
-                    Section("Conditions") {
-                        StatRow(label: "Trail", value: "Open with caution at river crossings")
-                        ForEach(store.activeTrailWaypoints.filter { dangerousCrossingWaypointIDs.contains($0.id) }) { crossing in
-                            if let summary = crossing.summary {
-                                Text("• \(crossing.name): \(summary)")
-                                    .font(.footnote)
-                            }
-                        }
-                    }
-                }
-                .listStyle(.insetGrouped)
-            }
-            .navigationTitle("Navigate")
-            .navigationBarTitleDisplayMode(.large)
-            .navigationBarItems(trailing: ProfileAvatarButton(store: store))
-        }
-        .navigationViewStyle(.stack)
-    }
-
-    private var navigationProgress: NavigationProgress? {
-        guard let location = locationTracker.latestLocation else { return nil }
-        let nearest = nearestIndex(for: location.coordinate)
-        let remaining = distanceRemainingMiles(route: store.activeTrailCoordinates, nearestIndex: nearest)
-        let traveled = max(0, store.activeTrailDistanceMiles - remaining)
-        return NavigationProgress(remainingMiles: remaining, traveledMiles: traveled)
-    }
-
-    private var trailPositionSnapshot: TrailPositionSnapshot? {
-        guard let location = locationTracker.latestLocation else { return nil }
-        guard let progress = navigationProgress else { return nil }
-        let offTrail = distanceToTrailMeters(from: location.coordinate, route: store.activeTrailCoordinates)
-        return TrailPositionSnapshot(
-            latitude: location.coordinate.latitude,
-            longitude: location.coordinate.longitude,
-            traveledMiles: progress.traveledMiles,
-            offTrailMeters: offTrail
-        )
-    }
-
-    private var nextWaypointSnapshot: NextWaypointSnapshot? {
-        guard let progress = navigationProgress else { return nil }
-        guard let next = nextWaypoint(distanceFromStartMiles: progress.traveledMiles, waypoints: store.activeTrailWaypoints) else { return nil }
-        return NextWaypointSnapshot(
-            waypoint: next,
-            distanceToNextMiles: max(0, next.distanceFromStart - progress.traveledMiles)
-        )
-    }
-
-    private func nearestIndex(for coordinate: CLLocationCoordinate2D) -> Int {
-        nearestRouteIndex(
-            route: store.activeTrailCoordinates,
-            userLocation: coordinate,
-            lastIndex: nil,
-            windowRadius: 25
-        )
-    }
-
-    private func segmentLabel(for miles: Double) -> String {
-        if miles < 3.5 { return "Timberline Lodge -> Paradise Park" }
-        if miles < 16.8 { return "Paradise Park -> Cairn Basin" }
-        if miles < 26.5 { return "Cairn Basin -> Cloud Cap" }
-        return "Cloud Cap -> Timberline Lodge"
-    }
-
-    private func distanceToTrailMeters(from coordinate: CLLocationCoordinate2D, route: [TrailCoordinate]) -> Double {
-        guard !route.isEmpty else { return .greatestFiniteMagnitude }
-        let current = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
-        return route.reduce(Double.greatestFiniteMagnitude) { best, point in
-            let dist = current.distance(from: CLLocation(latitude: point.latitude, longitude: point.longitude))
-            return min(best, dist)
-        }
-    }
-
-    private func locationStatusLabel(_ status: CLAuthorizationStatus) -> String {
-        switch status {
-        case .authorizedAlways, .authorizedWhenInUse:
-            return "Granted"
-        case .notDetermined:
-            return "Not Determined"
-        case .restricted:
-            return "Restricted"
-        case .denied:
-            return "Denied"
-        @unknown default:
-            return "Unknown"
         }
     }
 }
