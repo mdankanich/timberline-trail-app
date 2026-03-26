@@ -2700,6 +2700,7 @@ private struct MapHomeView: View {
 
     private var canAddWaypoint: Bool {
         guard store.canEditWaypoints(), let location = locationTracker.latestLocation else { return false }
+        if store.profile?.role == .admin { return true }
         return distanceToTrailMeters(from: location.coordinate) <= 120
     }
 
@@ -2708,6 +2709,7 @@ private struct MapHomeView: View {
         if store.profile?.role != .admin { return "Admin role is required to add waypoints." }
         if store.importedTrailData == nil { return "Import a GPX trail first." }
         guard let location = locationTracker.latestLocation else { return "GPS location is required." }
+        if store.profile?.role == .admin { return "" }
         let distance = distanceToTrailMeters(from: location.coordinate)
         if distance > 120 { return "Move closer to the trail to add a waypoint (\(Int(distance.rounded()))m away)." }
         return ""
@@ -2718,6 +2720,7 @@ private struct MapHomeView: View {
               let location = locationTracker.latestLocation,
               let latitude = waypoint.latitude,
               let longitude = waypoint.longitude else { return false }
+        if store.profile?.role == .admin { return true }
         let meters = CLLocation(latitude: latitude, longitude: longitude)
             .distance(from: CLLocation(latitude: location.coordinate.latitude, longitude: location.coordinate.longitude))
         return meters <= 100
@@ -3018,6 +3021,7 @@ private struct WaypointEditorSheet: View {
     private func save() {
         do {
             let editorName = store.profile?.name ?? store.session?.email ?? "Unknown"
+            let isAdmin = store.profile?.role == .admin
             switch mode {
             case .edit(let waypoint):
                 guard let current = locationTracker.latestLocation,
@@ -3025,10 +3029,12 @@ private struct WaypointEditorSheet: View {
                       let lon = waypoint.longitude else {
                     throw NSError(domain: "TrailImport", code: 30, userInfo: [NSLocalizedDescriptionKey: "Current GPS location is required to edit this waypoint."])
                 }
-                let meters = CLLocation(latitude: lat, longitude: lon)
-                    .distance(from: CLLocation(latitude: current.coordinate.latitude, longitude: current.coordinate.longitude))
-                guard meters <= 100 else {
-                    throw NSError(domain: "TrailImport", code: 31, userInfo: [NSLocalizedDescriptionKey: "Move within 100m of this waypoint to edit it."])
+                if !isAdmin {
+                    let meters = CLLocation(latitude: lat, longitude: lon)
+                        .distance(from: CLLocation(latitude: current.coordinate.latitude, longitude: current.coordinate.longitude))
+                    guard meters <= 100 else {
+                        throw NSError(domain: "TrailImport", code: 31, userInfo: [NSLocalizedDescriptionKey: "Move within 100m of this waypoint to edit it."])
+                    }
                 }
 
                 try store.updateWaypoint(
@@ -3043,12 +3049,14 @@ private struct WaypointEditorSheet: View {
                 guard let current = locationTracker.latestLocation else {
                     throw NSError(domain: "TrailImport", code: 32, userInfo: [NSLocalizedDescriptionKey: "Current GPS location is required to add a waypoint."])
                 }
-                let distance = distanceToTrailMeters(
-                    from: current.coordinate,
-                    route: store.activeTrailCoordinates
-                )
-                guard distance <= 120 else {
-                    throw NSError(domain: "TrailImport", code: 33, userInfo: [NSLocalizedDescriptionKey: "Move closer to the trail to add a waypoint."])
+                if !isAdmin {
+                    let distance = distanceToTrailMeters(
+                        from: current.coordinate,
+                        route: store.activeTrailCoordinates
+                    )
+                    guard distance <= 120 else {
+                        throw NSError(domain: "TrailImport", code: 33, userInfo: [NSLocalizedDescriptionKey: "Move closer to the trail to add a waypoint."])
+                    }
                 }
 
                 try store.addWaypointAtCurrentLocation(
