@@ -2405,6 +2405,13 @@ private struct MapHomeView: View {
         StatRow(label: "Route", value: store.activeTrailName)
         StatRow(label: "Distance", value: String(format: "%.1f mi", store.activeTrailDistanceMiles))
         StatRow(label: "Elevation Gain", value: "\(store.activeTrailElevationGainFeet.formatted()) ft")
+        StatRow(label: "Pending Sync", value: "\(store.pendingWaypointOperationsCount)")
+        if store.importedTrailData?.source.cloudTrailID != nil {
+            Button("Check for updates") {
+                Task { await store.refreshTrailUpdateAvailability() }
+            }
+            .buttonStyle(.bordered)
+        }
         if let update = store.availableTrailUpdate {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Trail update available")
