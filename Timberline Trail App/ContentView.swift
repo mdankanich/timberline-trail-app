@@ -264,6 +264,7 @@ struct TrailWaypoint: Identifiable, Codable, Hashable {
     var name: String
     var distanceFromStart: Double
     var type: TrailWaypointType = .waypoint
+    var seasonTag: String?
     var dangerLevel: DangerLevel?
     var summary: String?
     var latitude: Double?
@@ -2711,6 +2712,12 @@ private struct MapHomeView: View {
                     )
                     .font(.caption)
                     .foregroundColor(.secondary)
+                    if let seasonTag = item.waypoint.seasonTag,
+                       !seasonTag.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text("Season: \(seasonTag)")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
 
                     if let by = item.waypoint.lastEditedBy, let at = item.waypoint.lastEditedAt {
                         Text("Last edited by \(by) at \(at.formatted(date: .abbreviated, time: .shortened))")
@@ -2981,6 +2988,7 @@ private struct WaypointEditorSheet: View {
 
     @State private var name = ""
     @State private var summary = ""
+    @State private var seasonTag = ""
     @State private var type: TrailWaypointType = .waypoint
     @State private var dangerLevel: DangerLevel?
     @State private var errorMessage: String?
@@ -3005,6 +3013,8 @@ private struct WaypointEditorSheet: View {
                         Text("Medium").tag(DangerLevel.medium)
                         Text("High").tag(DangerLevel.high)
                     }
+                    TextField("Season Tag (optional)", text: $seasonTag)
+                        .textInputAutocapitalization(.words)
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Notes / Details")
                             .font(.subheadline)
@@ -3052,11 +3062,13 @@ private struct WaypointEditorSheet: View {
         case .edit(let waypoint):
             name = waypoint.name
             summary = waypoint.summary ?? ""
+            seasonTag = waypoint.seasonTag ?? ""
             type = waypoint.type
             dangerLevel = waypoint.dangerLevel
         case .add:
             name = ""
             summary = ""
+            seasonTag = ""
             type = .waypoint
             dangerLevel = nil
         }
@@ -3085,6 +3097,7 @@ private struct WaypointEditorSheet: View {
                     id: waypoint.id,
                     name: name,
                     type: type,
+                    seasonTag: normalizedSeasonTag(),
                     dangerLevel: dangerLevel,
                     summary: summary,
                     editorName: editorName
@@ -3106,6 +3119,7 @@ private struct WaypointEditorSheet: View {
                 try store.addWaypointAtCurrentLocation(
                     name: name,
                     type: type,
+                    seasonTag: normalizedSeasonTag(),
                     dangerLevel: dangerLevel,
                     summary: summary,
                     latitude: current.coordinate.latitude,
@@ -3131,6 +3145,11 @@ private struct WaypointEditorSheet: View {
             return min(best, dist)
         }
     }
+
+    private func normalizedSeasonTag() -> String? {
+        let trimmed = seasonTag.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
 }
 
 private struct WaypointDetailOverlayView: View {
@@ -3151,6 +3170,10 @@ private struct WaypointDetailOverlayView: View {
                 Section("Overview") {
                     StatRow(label: "Name", value: waypoint.name)
                     StatRow(label: "Type", value: waypoint.type.rawValue.capitalized)
+                    if let seasonTag = waypoint.seasonTag,
+                       !seasonTag.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        StatRow(label: "Season", value: seasonTag)
+                    }
                     StatRow(label: "From Start", value: String(format: "%.1f mi", waypoint.distanceFromStart))
                     StatRow(label: "To Next", value: segmentToNextMiles.map { String(format: "%.1f mi", $0) } ?? "End")
                 }

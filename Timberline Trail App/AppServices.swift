@@ -727,6 +727,16 @@ final class FirebaseTrailSyncService: TrailSyncService {
         var applied: Set<String> = []
         for operation in operations {
             guard var payload = operation.payload else { continue }
+            let existingSnapshot = try? await db
+                .collection("trails")
+                .document(trailId)
+                .collection("waypoints")
+                .document(operation.waypointId)
+                .getDocument()
+            let previousValue: TrailSyncWaypoint? = existingSnapshot
+                .flatMap { $0.data() }
+                .flatMap { FirestoreCodec.decode($0) as TrailSyncWaypoint? }
+
             payload.trailId = trailId
             payload.updatedAt = Date()
             payload.updatedByUID = uid
@@ -747,7 +757,7 @@ final class FirebaseTrailSyncService: TrailSyncService {
                 actorEmail: email,
                 changedAt: Date(),
                 clientTimestamp: operation.queuedAt,
-                previousValue: nil,
+                previousValue: previousValue,
                 newValue: payload
             )
             guard let changeData = FirestoreCodec.encode(change) else { continue }

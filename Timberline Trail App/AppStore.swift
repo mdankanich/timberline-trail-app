@@ -429,6 +429,7 @@ final class AppStore: ObservableObject {
                     name: remote.name,
                     distanceFromStart: remote.distanceFromStart,
                     type: remote.type,
+                    seasonTag: remote.seasonTag,
                     dangerLevel: remote.dangerLevel,
                     summary: remote.summary,
                     latitude: remote.latitude,
@@ -468,6 +469,7 @@ final class AppStore: ObservableObject {
         id: String,
         name: String,
         type: TrailWaypointType,
+        seasonTag: String?,
         dangerLevel: DangerLevel?,
         summary: String?,
         editorName: String
@@ -481,6 +483,7 @@ final class AppStore: ObservableObject {
 
         imported.waypoints[index].name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         imported.waypoints[index].type = type
+        imported.waypoints[index].seasonTag = seasonTag?.trimmingCharacters(in: .whitespacesAndNewlines)
         imported.waypoints[index].dangerLevel = dangerLevel
         let note = summary?.trimmingCharacters(in: .whitespacesAndNewlines)
         imported.waypoints[index].summary = (note?.isEmpty == true) ? nil : note
@@ -498,6 +501,7 @@ final class AppStore: ObservableObject {
     func addWaypointAtCurrentLocation(
         name: String,
         type: TrailWaypointType,
+        seasonTag: String?,
         dangerLevel: DangerLevel?,
         summary: String?,
         latitude: Double,
@@ -523,6 +527,7 @@ final class AppStore: ObservableObject {
             name: trimmedName,
             distanceFromStart: distanceFromStart,
             type: type,
+            seasonTag: seasonTag?.trimmingCharacters(in: .whitespacesAndNewlines),
             dangerLevel: dangerLevel,
             summary: summary?.trimmingCharacters(in: .whitespacesAndNewlines),
             latitude: latitude,
@@ -939,7 +944,7 @@ final class AppStore: ObservableObject {
             distanceFromStart: waypoint.distanceFromStart,
             latitude: latitude,
             longitude: longitude,
-            seasonTag: nil,
+            seasonTag: waypoint.seasonTag,
             isDeleted: action == .softDelete,
             deletedAt: action == .softDelete ? Date() : nil,
             deletedBy: action == .softDelete ? (profile?.name ?? session?.email) : nil,
