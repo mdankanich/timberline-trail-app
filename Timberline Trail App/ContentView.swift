@@ -2367,6 +2367,7 @@ private struct MapHomeView: View {
                     segmentToNextMiles: segmentToNextDistance(for: waypoint),
                     canEditAtCurrentLocation: canEditWaypoint(waypoint),
                     canAddAtCurrentLocation: canAddWaypoint,
+                    canDeleteWaypoint: store.canEditWaypoints(),
                     onEdit: { selected in
                         selectedMapWaypoint = nil
                         editingWaypoint = selected
@@ -2374,6 +2375,15 @@ private struct MapHomeView: View {
                     onAddAtCurrentLocation: {
                         selectedMapWaypoint = nil
                         showingAddWaypoint = true
+                    },
+                    onDelete: { selected in
+                        do {
+                            try store.deleteWaypoint(id: selected.id)
+                            trailEditError = nil
+                            selectedMapWaypoint = nil
+                        } catch {
+                            trailEditError = (error as NSError).localizedDescription
+                        }
                     }
                 )
             }
@@ -2700,16 +2710,16 @@ private struct MapHomeView: View {
 
     private var canAddWaypoint: Bool {
         guard store.canEditWaypoints(), let location = locationTracker.latestLocation else { return false }
-        if store.profile?.role == .admin { return true }
+        if store.currentUserRole == .admin { return true }
         return distanceToTrailMeters(from: location.coordinate) <= 120
     }
 
     private func addWaypointBlockedReason() -> String {
         if store.session == nil { return "Sign in to add waypoints." }
-        if store.profile?.role != .admin { return "Admin role is required to add waypoints." }
+        if store.currentUserRole != .admin { return "Admin role is required to add waypoints." }
         if store.importedTrailData == nil { return "Import a GPX trail first." }
         guard let location = locationTracker.latestLocation else { return "GPS location is required." }
-        if store.profile?.role == .admin { return "" }
+        if store.currentUserRole == .admin { return "" }
         let distance = distanceToTrailMeters(from: location.coordinate)
         if distance > 120 { return "Move closer to the trail to add a waypoint (\(Int(distance.rounded()))m away)." }
         return ""
@@ -2720,7 +2730,7 @@ private struct MapHomeView: View {
               let location = locationTracker.latestLocation,
               let latitude = waypoint.latitude,
               let longitude = waypoint.longitude else { return false }
-        if store.profile?.role == .admin { return true }
+        if store.currentUserRole == .admin { return true }
         let meters = CLLocation(latitude: latitude, longitude: longitude)
             .distance(from: CLLocation(latitude: location.coordinate.latitude, longitude: location.coordinate.longitude))
         return meters <= 100
@@ -3021,7 +3031,7 @@ private struct WaypointEditorSheet: View {
     private func save() {
         do {
             let editorName = store.profile?.name ?? store.session?.email ?? "Unknown"
-            let isAdmin = store.profile?.role == .admin
+            let isAdmin = store.currentUserRole == .admin
             switch mode {
             case .edit(let waypoint):
                 guard let current = locationTracker.latestLocation,
@@ -3095,8 +3105,11 @@ private struct WaypointDetailOverlayView: View {
     let segmentToNextMiles: Double?
     let canEditAtCurrentLocation: Bool
     let canAddAtCurrentLocation: Bool
+    let canDeleteWaypoint: Bool
     let onEdit: (TrailWaypoint) -> Void
     let onAddAtCurrentLocation: () -> Void
+    let onDelete: (TrailWaypoint) -> Void
+    @State private var showingDeleteConfirmation = false
 
     var body: some View {
         NavigationView {
@@ -3150,6 +3163,11 @@ private struct WaypointDetailOverlayView: View {
                             .font(.footnote)
                             .foregroundColor(.secondary)
                     }
+
+                    Button("Delete Waypoint", role: .destructive) {
+                        showingDeleteConfirmation = true
+                    }
+                    .disabled(!canDeleteWaypoint)
                 }
             }
             .listStyle(.insetGrouped)
@@ -3161,6 +3179,15 @@ private struct WaypointDetailOverlayView: View {
                         dismiss()
                     }
                 }
+            }
+            .confirmationDialog("Delete waypoint?", isPresented: $showingDeleteConfirmation, titleVisibility: .visible) {
+                Button("Delete Waypoint", role: .destructive) {
+                    dismiss()
+                    onDelete(waypoint)
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This will permanently remove the waypoint from the imported trail.")
             }
         }
         .navigationViewStyle(.stack)
@@ -4068,9 +4095,9 @@ private struct SettingsView: View {
                                 )
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(store.profile?.name ?? "Hiker")
-                                Text((store.profile?.role ?? .user).rawValue.capitalized)
+                                Text(store.currentUserRole.rawValue.capitalized)
                                     .font(.caption2)
-                                    .foregroundColor((store.profile?.role ?? .user) == .admin ? .orange : .secondary)
+                                    .foregroundColor(store.currentUserRole == .admin ? .orange : .secondary)
                                 if let displayEmail = (store.profile?.email ?? store.session?.email)?
                                     .trimmingCharacters(in: .whitespacesAndNewlines),
                                    !displayEmail.isEmpty {
@@ -4383,9 +4410,18 @@ private struct ProfileView: View {
                     .disableAutocorrection(true)
                 TextField("Phone", text: $draftPhone)
                     .keyboardType(.phonePad)
-                Picker("Role", selection: $draftRole) {
-                    Text("User").tag(UserRole.user)
-                    Text("Admin").tag(UserRole.admin)
+                if store.canChangeRole {
+                    Picker("Role", selection: $draftRole) {
+                        Text("User").tag(UserRole.user)
+                        Text("Admin").tag(UserRole.admin)
+                    }
+                } else {
+                    HStack {
+                        Text("Role")
+                        Spacer()
+                        Text("User")
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
 
@@ -4397,7 +4433,7 @@ private struct ProfileView: View {
                         photoURI: finalPhotoURI,
                         email: normalizedField(draftEmail),
                         phone: normalizedField(draftPhone),
-                        role: draftRole
+                        role: store.canChangeRole ? draftRole : .user
                     )
                     dismiss()
                 }
@@ -4417,7 +4453,7 @@ private struct ProfileView: View {
             draftName = store.profile?.name ?? ""
             draftEmail = store.profile?.email ?? store.session?.email ?? ""
             draftPhone = store.profile?.phone ?? ""
-            draftRole = store.profile?.role ?? .user
+            draftRole = store.currentUserRole
             draftPhotoURI = store.profile?.photoURI
         }
         .sheet(isPresented: $showingImagePicker) {

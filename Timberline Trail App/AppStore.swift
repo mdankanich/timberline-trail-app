@@ -30,6 +30,10 @@ func deriveAppFlowState(session: AuthSession?, profile: UserProfile?) -> AppFlow
 
 @MainActor
 final class AppStore: ObservableObject {
+    private static let adminEmailAllowlist: Set<String> = [
+        "mdankanich@slovo.org"
+    ]
+
     @Published private(set) var session: AuthSession?
     @Published private(set) var profile: UserProfile?
     @Published private(set) var settings: AppSettings
@@ -88,6 +92,20 @@ final class AppStore: ObservableObject {
 
     var activeTrip: Trip? {
         trips.first(where: { $0.id == activeTripID })
+    }
+
+    var canChangeRole: Bool {
+        guard let email = session?.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
+            return false
+        }
+        return Self.adminEmailAllowlist.contains(email)
+    }
+
+    var currentUserRole: UserRole {
+        if canChangeRole {
+            return profile?.role ?? .user
+        }
+        return .user
     }
 
     func signIn(email: String, password: String) async {
@@ -267,7 +285,7 @@ final class AppStore: ObservableObject {
             photoURI: photoURI ?? profile?.photoURI,
             email: normalizedEmail,
             phone: normalizedPhone,
-            role: role ?? profile?.role ?? .user
+            role: canChangeRole ? (role ?? profile?.role ?? .user) : .user
         )
         profile = next
         userService.saveLocalProfile(next)
@@ -380,7 +398,7 @@ final class AppStore: ObservableObject {
     }
 
     func canEditWaypoints() -> Bool {
-        session != nil && importedTrailData != nil && profile?.role == .admin
+        session != nil && importedTrailData != nil && currentUserRole == .admin
     }
 
     func updateWaypoint(
@@ -448,6 +466,22 @@ final class AppStore: ObservableObject {
             lastEditedAt: Date()
         )
         imported.waypoints.append(waypoint)
+        imported.waypoints.sort { $0.distanceFromStart < $1.distanceFromStart }
+
+        importedTrailData = imported
+        try Self.persistImportedTrail(imported, fileManager: fileManager, defaults: defaults)
+        persistTrips()
+    }
+
+    func deleteWaypoint(id: String) throws {
+        guard canEditWaypoints(), var imported = importedTrailData else {
+            throw NSError(domain: "TrailImport", code: 24, userInfo: [NSLocalizedDescriptionKey: "Admin role and imported GPX trail are required before deleting waypoints."])
+        }
+        guard imported.waypoints.contains(where: { $0.id == id }) else {
+            throw NSError(domain: "TrailImport", code: 25, userInfo: [NSLocalizedDescriptionKey: "Waypoint not found."])
+        }
+
+        imported.waypoints.removeAll { $0.id == id }
         imported.waypoints.sort { $0.distanceFromStart < $1.distanceFromStart }
 
         importedTrailData = imported
