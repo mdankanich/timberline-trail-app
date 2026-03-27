@@ -449,6 +449,10 @@ final class AppStore: ObservableObject {
         await flushPendingWaypointOperations()
     }
 
+    func refreshTrailUpdateAvailability() async {
+        await checkForTrailUpdate()
+    }
+
     func resetImportedTrail() {
         importedTrailData = nil
         Self.removePersistedImportedTrail(fileManager: fileManager)

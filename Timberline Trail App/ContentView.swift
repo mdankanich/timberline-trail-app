@@ -2293,6 +2293,7 @@ private struct MapHomeView: View {
 
     @ObservedObject var store: AppStore
     @ObservedObject var locationTracker: LocationTracker
+    private let trailUpdatePollTimer = Timer.publish(every: 45, on: .main, in: .common).autoconnect()
     @State private var editingWaypoint: TrailWaypoint?
     @State private var showingAddWaypoint = false
     @State private var trailEditError: String?
@@ -2346,6 +2347,10 @@ private struct MapHomeView: View {
             .navigationTitle("Trail")
             .navigationBarTitleDisplayMode(.large)
             .navigationBarItems(trailing: ProfileAvatarButton(store: store))
+            .onReceive(trailUpdatePollTimer) { _ in
+                guard store.importedTrailData?.source.cloudTrailID != nil else { return }
+                Task { await store.refreshTrailUpdateAvailability() }
+            }
             .sheet(item: $editingWaypoint) { waypoint in
                 WaypointEditorSheet(
                     mode: .edit(waypoint),
