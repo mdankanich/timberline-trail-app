@@ -104,6 +104,13 @@ struct PendingWaypointOperation: Codable, Hashable, Identifiable {
     var payload: TrailSyncWaypoint?
 }
 
+struct TrailRemoteUpdateInfo: Codable, Hashable {
+    var trailId: String
+    var versionId: String
+    var updatedAt: Date
+    var changesSummary: TrailSyncChangesSummary
+}
+
 enum AppPersistenceKeys {
     static let users = "phase1_users"
     static let session = "phase1_session"
@@ -113,6 +120,7 @@ enum AppPersistenceKeys {
     static let activeTripID = "phase1_active_trip_id"
     static let importedTrail = "phase1_imported_trail"
     static let pendingWaypointOperations = "phase1_pending_waypoint_operations"
+    static let dismissedTrailUpdateVersion = "phase1_dismissed_trail_update_version"
 }
 
 enum AuthServiceError: LocalizedError, Equatable {
@@ -188,6 +196,8 @@ protocol TrailSyncService {
     func findTrailByGPXHash(_ gpxHash: String) async -> TrailSyncTrail?
     func upsertTrailFromImport(imported: ImportedTrailData, gpxHash: String) async -> TrailSyncTrail?
     func applyPendingWaypointOperations(_ operations: [PendingWaypointOperation], preferredTrailId: String?) async -> Set<String>
+    func fetchRemoteTrailUpdate(trailId: String, localVersionId: String?) async -> TrailRemoteUpdateInfo?
+    func fetchActiveWaypoints(trailId: String) async -> [TrailSyncWaypoint]
 }
 
 enum PersistenceCodec {
@@ -436,6 +446,8 @@ final class LocalTrailSyncService: TrailSyncService {
     func findTrailByGPXHash(_ gpxHash: String) async -> TrailSyncTrail? { nil }
     func upsertTrailFromImport(imported: ImportedTrailData, gpxHash: String) async -> TrailSyncTrail? { nil }
     func applyPendingWaypointOperations(_ operations: [PendingWaypointOperation], preferredTrailId: String?) async -> Set<String> { [] }
+    func fetchRemoteTrailUpdate(trailId: String, localVersionId: String?) async -> TrailRemoteUpdateInfo? { nil }
+    func fetchActiveWaypoints(trailId: String) async -> [TrailSyncWaypoint] { [] }
 }
 
 #if canImport(FirebaseAuth) && canImport(FirebaseFirestore)
@@ -749,6 +761,58 @@ final class FirebaseTrailSyncService: TrailSyncService {
             }
         }
         return applied
+    }
+
+    func fetchRemoteTrailUpdate(trailId: String, localVersionId: String?) async -> TrailRemoteUpdateInfo? {
+        do {
+            let trailSnap = try await Firestore.firestore().collection("trails").document(trailId).getDocument()
+            guard let data = trailSnap.data(), var trail: TrailSyncTrail = FirestoreCodec.decode(data) else {
+                return nil
+            }
+            if trail.id.isEmpty {
+                trail.id = trailId
+            }
+            if localVersionId == trail.currentVersionId {
+                return nil
+            }
+            let versionSnap = try await Firestore.firestore()
+                .collection("trails")
+                .document(trailId)
+                .collection("versions")
+                .document(trail.currentVersionId)
+                .getDocument()
+            let summary = (versionSnap.data()).flatMap { (data: [String: Any]) -> TrailSyncVersion? in
+                FirestoreCodec.decode(data)
+            }?.changesSummary ?? TrailSyncChangesSummary(added: 0, edited: 0, softDeleted: 0)
+            return TrailRemoteUpdateInfo(
+                trailId: trailId,
+                versionId: trail.currentVersionId,
+                updatedAt: trail.updatedAt,
+                changesSummary: summary
+            )
+        } catch {
+            return nil
+        }
+    }
+
+    func fetchActiveWaypoints(trailId: String) async -> [TrailSyncWaypoint] {
+        do {
+            let query = try await Firestore.firestore()
+                .collection("trails")
+                .document(trailId)
+                .collection("waypoints")
+                .whereField("isDeleted", isEqualTo: false)
+                .getDocuments()
+            return query.documents.compactMap { doc in
+                var decoded: TrailSyncWaypoint? = FirestoreCodec.decode(doc.data())
+                if decoded?.id.isEmpty ?? true {
+                    decoded?.id = doc.documentID
+                }
+                return decoded
+            }
+        } catch {
+            return []
+        }
     }
 }
 #endif

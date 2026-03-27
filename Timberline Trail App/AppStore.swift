@@ -46,6 +46,8 @@ final class AppStore: ObservableObject {
     @Published private(set) var safetyKeyNumbers: [SafetyKeyNumber]
     @Published private(set) var importedTrailData: ImportedTrailData?
     @Published private(set) var pendingWaypointOperationsCount: Int
+    @Published private(set) var availableTrailUpdate: TrailRemoteUpdateInfo?
+    @Published private(set) var isApplyingTrailUpdate: Bool
 
     private var backgroundedAt: Date?
     private var currentNonce: String?
@@ -90,6 +92,8 @@ final class AppStore: ObservableObject {
         self.isAuthLoading = false
         self.flowState = deriveAppFlowState(session: initialSession, profile: initialProfile)
         self.pendingWaypointOperationsCount = self.pendingWaypointOperations.count
+        self.availableTrailUpdate = nil
+        self.isApplyingTrailUpdate = false
 
         if session != nil {
             Task { await refreshFromCloud() }
@@ -403,6 +407,48 @@ final class AppStore: ObservableObject {
         Task { await syncImportedTrailToCloud(imported, gpxHash: gpxHash) }
     }
 
+    func deferAvailableTrailUpdate() {
+        guard let versionId = availableTrailUpdate?.versionId else { return }
+        defaults.set(versionId, forKey: AppPersistenceKeys.dismissedTrailUpdateVersion)
+        availableTrailUpdate = nil
+    }
+
+    func applyAvailableTrailUpdate() async {
+        guard !isApplyingTrailUpdate else { return }
+        guard let update = availableTrailUpdate else { return }
+        guard var imported = importedTrailData else { return }
+        isApplyingTrailUpdate = true
+        defer { isApplyingTrailUpdate = false }
+
+        let remoteWaypoints = await trailSyncService.fetchActiveWaypoints(trailId: update.trailId)
+
+        imported.waypoints = remoteWaypoints
+            .map { remote in
+                TrailWaypoint(
+                    id: remote.id,
+                    name: remote.name,
+                    distanceFromStart: remote.distanceFromStart,
+                    type: remote.type,
+                    dangerLevel: remote.dangerLevel,
+                    summary: remote.summary,
+                    latitude: remote.latitude,
+                    longitude: remote.longitude,
+                    lastEditedBy: remote.updatedByEmail ?? remote.updatedByUID,
+                    lastEditedAt: remote.updatedAt
+                )
+            }
+            .sorted { $0.distanceFromStart < $1.distanceFromStart }
+        imported.source.cloudVersionID = update.versionId
+        imported.source.generatedAt = Date()
+
+        importedTrailData = imported
+        try? Self.persistImportedTrail(imported, fileManager: fileManager, defaults: defaults)
+        persistTrips()
+        defaults.removeObject(forKey: AppPersistenceKeys.dismissedTrailUpdateVersion)
+        availableTrailUpdate = nil
+        await flushPendingWaypointOperations()
+    }
+
     func resetImportedTrail() {
         importedTrailData = nil
         Self.removePersistedImportedTrail(fileManager: fileManager)
@@ -657,6 +703,7 @@ final class AppStore: ObservableObject {
             safetyKeyNumbers = SafetyContent.fallback.keyNumbers
         }
         await flushPendingWaypointOperations()
+        await checkForTrailUpdate()
         refreshFlowState()
     }
 
@@ -676,10 +723,13 @@ final class AppStore: ObservableObject {
         importedTrailData = nil
         pendingWaypointOperations = []
         pendingWaypointOperationsCount = 0
+        availableTrailUpdate = nil
+        isApplyingTrailUpdate = false
         userService.clearLocalProfile()
         tripService.clearLocalTrips()
         defaults.removeObject(forKey: AppPersistenceKeys.importedTrail)
         defaults.removeObject(forKey: AppPersistenceKeys.pendingWaypointOperations)
+        defaults.removeObject(forKey: AppPersistenceKeys.dismissedTrailUpdateVersion)
         Self.removePersistedImportedTrail(fileManager: fileManager)
         refreshFlowState()
     }
@@ -801,20 +851,24 @@ final class AppStore: ObservableObject {
         if let existing = await trailSyncService.findTrailByGPXHash(gpxHash) {
             if importedTrailData?.source.gpxHash == gpxHash {
                 importedTrailData?.source.cloudTrailID = existing.id
+                importedTrailData?.source.cloudVersionID = existing.currentVersionId
                 if let updated = importedTrailData {
                     try? Self.persistImportedTrail(updated, fileManager: fileManager, defaults: defaults)
                 }
             }
             await flushPendingWaypointOperations()
+            await checkForTrailUpdate()
             return
         }
         if let created = await trailSyncService.upsertTrailFromImport(imported: imported, gpxHash: gpxHash),
            importedTrailData?.source.gpxHash == gpxHash {
             importedTrailData?.source.cloudTrailID = created.id
+            importedTrailData?.source.cloudVersionID = created.currentVersionId
             if let updated = importedTrailData {
                 try? Self.persistImportedTrail(updated, fileManager: fileManager, defaults: defaults)
             }
             await flushPendingWaypointOperations()
+            await checkForTrailUpdate()
         }
     }
 
@@ -921,5 +975,23 @@ final class AppStore: ObservableObject {
             defaults: defaults
         )
         pendingWaypointOperationsCount = pendingWaypointOperations.count
+    }
+
+    private func checkForTrailUpdate() async {
+        guard let trailId = importedTrailData?.source.cloudTrailID else {
+            availableTrailUpdate = nil
+            return
+        }
+        let localVersionId = importedTrailData?.source.cloudVersionID
+        guard let update = await trailSyncService.fetchRemoteTrailUpdate(trailId: trailId, localVersionId: localVersionId) else {
+            availableTrailUpdate = nil
+            return
+        }
+        let dismissedVersion = defaults.string(forKey: AppPersistenceKeys.dismissedTrailUpdateVersion)
+        if dismissedVersion == update.versionId {
+            availableTrailUpdate = nil
+            return
+        }
+        availableTrailUpdate = update
     }
 }

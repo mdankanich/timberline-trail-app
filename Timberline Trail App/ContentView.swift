@@ -331,6 +331,7 @@ struct ImportedTrailSourceInfo: Codable, Hashable {
     var overlayApplied: String?
     var gpxHash: String? = nil
     var cloudTrailID: String? = nil
+    var cloudVersionID: String? = nil
 }
 
 struct ImportedTrailData: Codable, Hashable {
@@ -2398,6 +2399,33 @@ private struct MapHomeView: View {
         StatRow(label: "Route", value: store.activeTrailName)
         StatRow(label: "Distance", value: String(format: "%.1f mi", store.activeTrailDistanceMiles))
         StatRow(label: "Elevation Gain", value: "\(store.activeTrailElevationGainFeet.formatted()) ft")
+        if let update = store.availableTrailUpdate {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Trail update available")
+                    .font(.subheadline.weight(.semibold))
+                Text(
+                    "Added \(update.changesSummary.added) • " +
+                    "Edited \(update.changesSummary.edited) • " +
+                    "Removed \(update.changesSummary.softDeleted)"
+                )
+                .font(.footnote)
+                .foregroundColor(.secondary)
+                HStack {
+                    Button("Update now") {
+                        Task { await store.applyAvailableTrailUpdate() }
+                    }
+                    .disabled(store.isApplyingTrailUpdate)
+                    .buttonStyle(.borderedProminent)
+
+                    Button("Later") {
+                        store.deferAvailableTrailUpdate()
+                    }
+                    .disabled(store.isApplyingTrailUpdate)
+                    .buttonStyle(.bordered)
+                }
+            }
+            .padding(.vertical, 4)
+        }
         if store.importedTrailData == nil {
             Text("Import a GPX trail in Settings to enable waypoint mapping and edits.")
                 .font(.footnote)
