@@ -21,6 +21,96 @@ struct TripsSnapshot: Codable, Hashable {
     var importedTrailData: ImportedTrailData?
 }
 
+// MARK: - Trail Sync Models (Step 1 schema foundation)
+
+enum WaypointChangeAction: String, Codable, Hashable {
+    case add
+    case edit
+    case softDelete
+}
+
+struct TrailSyncWaypoint: Codable, Hashable, Identifiable {
+    var id: String
+    var trailId: String
+    var name: String
+    var type: TrailWaypointType
+    var dangerLevel: DangerLevel?
+    var summary: String?
+    var distanceFromStart: Double
+    var latitude: Double
+    var longitude: Double
+    var seasonTag: String?
+    var isDeleted: Bool
+    var deletedAt: Date?
+    var deletedBy: String?
+    var updatedAt: Date
+    var updatedByUID: String
+    var updatedByEmail: String?
+}
+
+struct TrailSyncWaypointChange: Codable, Hashable, Identifiable {
+    var id: String
+    var trailId: String
+    var waypointId: String
+    var action: WaypointChangeAction
+    var seasonTag: String?
+    var actorUID: String
+    var actorEmail: String?
+    var changedAt: Date
+    var clientTimestamp: Date?
+    var previousValue: TrailSyncWaypoint?
+    var newValue: TrailSyncWaypoint?
+}
+
+struct TrailSyncVersion: Codable, Hashable, Identifiable {
+    var id: String
+    var trailId: String
+    var baseVersionId: String?
+    var fileName: String
+    var gpxHash: String
+    var routePointCount: Int
+    var waypointCount: Int
+    var createdAt: Date
+    var createdByUID: String
+    var createdByEmail: String?
+    var changesSummary: TrailSyncChangesSummary
+}
+
+struct TrailSyncChangesSummary: Codable, Hashable {
+    var added: Int
+    var edited: Int
+    var softDeleted: Int
+}
+
+struct TrailSyncTrail: Codable, Hashable, Identifiable {
+    var id: String
+    var name: String
+    var currentVersionId: String
+    var sourceFileName: String
+    var sourceGPXHash: String
+    var lastSyncedAt: Date
+    var updatedAt: Date
+    var updatedByUID: String
+    var updatedByEmail: String?
+}
+
+struct PendingWaypointOperation: Codable, Hashable, Identifiable {
+    var id: String
+    var trailId: String?
+    var waypointId: String
+    var action: WaypointChangeAction
+    var queuedAt: Date
+    var actorEmail: String?
+    var payload: TrailSyncWaypoint?
+}
+
+struct TrailRemoteUpdateInfo: Codable, Hashable {
+    var trailId: String
+    var versionId: String
+    var updatedAt: Date
+    var changesSummary: TrailSyncChangesSummary
+}
+
 enum AppPersistenceKeys {
     static let users = "phase1_users"
     static let session = "phase1_session"
@@ -29,6 +119,8 @@ enum AppPersistenceKeys {
     static let trips = "phase1_trips"
     static let activeTripID = "phase1_active_trip_id"
     static let importedTrail = "phase1_imported_trail"
+    static let pendingWaypointOperations = "phase1_pending_waypoint_operations"
+    static let dismissedTrailUpdateVersion = "phase1_dismissed_trail_update_version"
 }
 
 enum AuthServiceError: LocalizedError, Equatable {
@@ -98,6 +190,14 @@ protocol TripService {
 
 protocol AppContentService {
     func fetchSafetyContent() async -> SafetyContent?
+}
+
+protocol TrailSyncService {
+    func findTrailByGPXHash(_ gpxHash: String) async -> TrailSyncTrail?
+    func upsertTrailFromImport(imported: ImportedTrailData, gpxHash: String) async -> TrailSyncTrail?
+    func applyPendingWaypointOperations(_ operations: [PendingWaypointOperation], preferredTrailId: String?) async -> Set<String>
+    func fetchRemoteTrailUpdate(trailId: String, localVersionId: String?) async -> TrailRemoteUpdateInfo?
+    func fetchActiveWaypoints(trailId: String) async -> [TrailSyncWaypoint]
 }
 
 enum PersistenceCodec {
@@ -342,6 +442,14 @@ final class LocalAppContentService: AppContentService {
     func fetchSafetyContent() async -> SafetyContent? { nil }
 }
 
+final class LocalTrailSyncService: TrailSyncService {
+    func findTrailByGPXHash(_ gpxHash: String) async -> TrailSyncTrail? { nil }
+    func upsertTrailFromImport(imported: ImportedTrailData, gpxHash: String) async -> TrailSyncTrail? { nil }
+    func applyPendingWaypointOperations(_ operations: [PendingWaypointOperation], preferredTrailId: String?) async -> Set<String> { [] }
+    func fetchRemoteTrailUpdate(trailId: String, localVersionId: String?) async -> TrailRemoteUpdateInfo? { nil }
+    func fetchActiveWaypoints(trailId: String) async -> [TrailSyncWaypoint] { [] }
+}
+
 #if canImport(FirebaseAuth) && canImport(FirebaseFirestore)
 enum FirestoreCodec {
     static func encode<T: Encodable>(_ value: T) -> [String: Any]? {
@@ -505,6 +613,218 @@ final class FirebaseAppContentService: AppContentService {
         }
     }
 }
+
+final class FirebaseTrailSyncService: TrailSyncService {
+    private func actorUID() -> String? { Auth.auth().currentUser?.uid }
+    private func actorEmail() -> String? { Auth.auth().currentUser?.email }
+
+    func findTrailByGPXHash(_ gpxHash: String) async -> TrailSyncTrail? {
+        do {
+            let query = try await Firestore.firestore()
+                .collection("trails")
+                .whereField("sourceGPXHash", isEqualTo: gpxHash)
+                .limit(to: 1)
+                .getDocuments()
+            guard let document = query.documents.first else { return nil }
+            var decoded: TrailSyncTrail? = FirestoreCodec.decode(document.data())
+            if decoded?.id.isEmpty ?? true {
+                decoded?.id = document.documentID
+            }
+            return decoded
+        } catch {
+            return nil
+        }
+    }
+
+    func upsertTrailFromImport(imported: ImportedTrailData, gpxHash: String) async -> TrailSyncTrail? {
+        if let existing = await findTrailByGPXHash(gpxHash) {
+            return existing
+        }
+
+        guard let uid = actorUID() else { return nil }
+        let email = actorEmail()
+        let now = Date()
+        let trailId = "trail_" + String(gpxHash.prefix(16))
+        let versionId = "ver_" + String(UUID().uuidString.prefix(12))
+        let summary = TrailSyncChangesSummary(
+            added: imported.waypoints.count,
+            edited: 0,
+            softDeleted: 0
+        )
+        let trail = TrailSyncTrail(
+            id: trailId,
+            name: imported.name,
+            currentVersionId: versionId,
+            sourceFileName: imported.source.fileName,
+            sourceGPXHash: gpxHash,
+            lastSyncedAt: now,
+            updatedAt: now,
+            updatedByUID: uid,
+            updatedByEmail: email
+        )
+        let version = TrailSyncVersion(
+            id: versionId,
+            trailId: trailId,
+            baseVersionId: nil,
+            fileName: imported.source.fileName,
+            gpxHash: gpxHash,
+            routePointCount: imported.coordinates.count,
+            waypointCount: imported.waypoints.count,
+            createdAt: now,
+            createdByUID: uid,
+            createdByEmail: email,
+            changesSummary: summary
+        )
+
+        guard
+            let trailData = FirestoreCodec.encode(trail),
+            let versionData = FirestoreCodec.encode(version)
+        else { return nil }
+
+        do {
+            let db = Firestore.firestore()
+            try await db.collection("trails").document(trailId).setData(trailData, merge: true)
+            try await db.collection("trails").document(trailId).collection("versions").document(versionId).setData(versionData, merge: true)
+
+            for waypoint in imported.waypoints {
+                guard let latitude = waypoint.latitude, let longitude = waypoint.longitude else { continue }
+                let syncWaypoint = TrailSyncWaypoint(
+                    id: waypoint.id,
+                    trailId: trailId,
+                    name: waypoint.name,
+                    type: waypoint.type,
+                    dangerLevel: waypoint.dangerLevel,
+                    summary: waypoint.summary,
+                    distanceFromStart: waypoint.distanceFromStart,
+                    latitude: latitude,
+                    longitude: longitude,
+                    seasonTag: nil,
+                    isDeleted: false,
+                    deletedAt: nil,
+                    deletedBy: nil,
+                    updatedAt: now,
+                    updatedByUID: uid,
+                    updatedByEmail: email
+                )
+                guard let waypointData = FirestoreCodec.encode(syncWaypoint) else { continue }
+                try await db.collection("trails").document(trailId).collection("waypoints").document(waypoint.id).setData(waypointData, merge: true)
+            }
+
+            return trail
+        } catch {
+            return nil
+        }
+    }
+
+    func applyPendingWaypointOperations(_ operations: [PendingWaypointOperation], preferredTrailId: String?) async -> Set<String> {
+        guard !operations.isEmpty else { return [] }
+        guard let uid = actorUID() else { return [] }
+        let email = actorEmail()
+        let db = Firestore.firestore()
+        let resolvedTrailId = preferredTrailId ?? operations.compactMap { $0.trailId }.first
+        guard let trailId = resolvedTrailId, !trailId.isEmpty else { return [] }
+
+        var applied: Set<String> = []
+        for operation in operations {
+            guard var payload = operation.payload else { continue }
+            let existingSnapshot = try? await db
+                .collection("trails")
+                .document(trailId)
+                .collection("waypoints")
+                .document(operation.waypointId)
+                .getDocument()
+            let previousValue: TrailSyncWaypoint? = existingSnapshot
+                .flatMap { $0.data() }
+                .flatMap { FirestoreCodec.decode($0) as TrailSyncWaypoint? }
+
+            payload.trailId = trailId
+            payload.updatedAt = Date()
+            payload.updatedByUID = uid
+            payload.updatedByEmail = email
+            if operation.action == .softDelete {
+                payload.isDeleted = true
+                payload.deletedAt = Date()
+                payload.deletedBy = email
+            }
+            guard let waypointData = FirestoreCodec.encode(payload) else { continue }
+            let change = TrailSyncWaypointChange(
+                id: "chg_" + String(UUID().uuidString.prefix(14)),
+                trailId: trailId,
+                waypointId: operation.waypointId,
+                action: operation.action,
+                seasonTag: payload.seasonTag,
+                actorUID: uid,
+                actorEmail: email,
+                changedAt: Date(),
+                clientTimestamp: operation.queuedAt,
+                previousValue: previousValue,
+                newValue: payload
+            )
+            guard let changeData = FirestoreCodec.encode(change) else { continue }
+
+            do {
+                try await db.collection("trails").document(trailId).collection("waypoints").document(operation.waypointId).setData(waypointData, merge: true)
+                try await db.collection("trails").document(trailId).collection("changes").document(change.id).setData(changeData, merge: false)
+                applied.insert(operation.id)
+            } catch {
+                continue
+            }
+        }
+        return applied
+    }
+
+    func fetchRemoteTrailUpdate(trailId: String, localVersionId: String?) async -> TrailRemoteUpdateInfo? {
+        do {
+            let trailSnap = try await Firestore.firestore().collection("trails").document(trailId).getDocument()
+            guard let data = trailSnap.data(), var trail: TrailSyncTrail = FirestoreCodec.decode(data) else {
+                return nil
+            }
+            if trail.id.isEmpty {
+                trail.id = trailId
+            }
+            if localVersionId == trail.currentVersionId {
+                return nil
+            }
+            let versionSnap = try await Firestore.firestore()
+                .collection("trails")
+                .document(trailId)
+                .collection("versions")
+                .document(trail.currentVersionId)
+                .getDocument()
+            let summary = (versionSnap.data()).flatMap { (data: [String: Any]) -> TrailSyncVersion? in
+                FirestoreCodec.decode(data)
+            }?.changesSummary ?? TrailSyncChangesSummary(added: 0, edited: 0, softDeleted: 0)
+            return TrailRemoteUpdateInfo(
+                trailId: trailId,
+                versionId: trail.currentVersionId,
+                updatedAt: trail.updatedAt,
+                changesSummary: summary
+            )
+        } catch {
+            return nil
+        }
+    }
+
+    func fetchActiveWaypoints(trailId: String) async -> [TrailSyncWaypoint] {
+        do {
+            let query = try await Firestore.firestore()
+                .collection("trails")
+                .document(trailId)
+                .collection("waypoints")
+                .whereField("isDeleted", isEqualTo: false)
+                .getDocuments()
+            return query.documents.compactMap { doc in
+                var decoded: TrailSyncWaypoint? = FirestoreCodec.decode(doc.data())
+                if decoded?.id.isEmpty ?? true {
+                    decoded?.id = doc.documentID
+                }
+                return decoded
+            }
+        } catch {
+            return []
+        }
+    }
+}
 #endif
 
 final class CompositeUserService: UserService {
@@ -547,6 +867,7 @@ struct AppEnvironment {
     let userService: UserService
     let tripService: TripService
     let appContentService: AppContentService
+    let trailSyncService: TrailSyncService
 }
 
 extension AppEnvironment {
@@ -565,10 +886,12 @@ extension AppEnvironment {
         let user: UserService = CompositeUserService(local: localUser, remote: FirebaseUserCloudService())
         let trip: TripService = CompositeTripService(local: localTrip, remote: FirebaseTripCloudService())
         let content: AppContentService = FirebaseAppContentService()
+        let trailSync: TrailSyncService = FirebaseTrailSyncService()
 #else
         let user: UserService = CompositeUserService(local: localUser, remote: nil)
         let trip: TripService = CompositeTripService(local: localTrip, remote: nil)
         let content: AppContentService = LocalAppContentService()
+        let trailSync: TrailSyncService = LocalTrailSyncService()
 #endif
 
         return AppEnvironment(
@@ -576,7 +899,8 @@ extension AppEnvironment {
             settingsService: localSettings,
             userService: user,
             tripService: trip,
-            appContentService: content
+            appContentService: content,
+            trailSyncService: trailSync
         )
     }
 }

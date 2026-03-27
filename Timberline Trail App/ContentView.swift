@@ -264,6 +264,7 @@ struct TrailWaypoint: Identifiable, Codable, Hashable {
     var name: String
     var distanceFromStart: Double
     var type: TrailWaypointType = .waypoint
+    var seasonTag: String?
     var dangerLevel: DangerLevel?
     var summary: String?
     var latitude: Double?
@@ -325,10 +326,13 @@ struct Campsite: Identifiable, Codable, Hashable {
 }
 
 struct ImportedTrailSourceInfo: Codable, Hashable {
-    let format: String
-    let fileName: String
-    let generatedAt: Date
-    let overlayApplied: String?
+    var format: String
+    var fileName: String
+    var generatedAt: Date
+    var overlayApplied: String?
+    var gpxHash: String? = nil
+    var cloudTrailID: String? = nil
+    var cloudVersionID: String? = nil
 }
 
 struct ImportedTrailData: Codable, Hashable {
@@ -2290,6 +2294,7 @@ private struct MapHomeView: View {
 
     @ObservedObject var store: AppStore
     @ObservedObject var locationTracker: LocationTracker
+    private let trailUpdatePollTimer = Timer.publish(every: 45, on: .main, in: .common).autoconnect()
     @State private var editingWaypoint: TrailWaypoint?
     @State private var showingAddWaypoint = false
     @State private var trailEditError: String?
@@ -2343,6 +2348,10 @@ private struct MapHomeView: View {
             .navigationTitle("Trail")
             .navigationBarTitleDisplayMode(.large)
             .navigationBarItems(trailing: ProfileAvatarButton(store: store))
+            .onReceive(trailUpdatePollTimer) { _ in
+                guard store.importedTrailData?.source.cloudTrailID != nil else { return }
+                Task { await store.refreshTrailUpdateAvailability() }
+            }
             .sheet(item: $editingWaypoint) { waypoint in
                 WaypointEditorSheet(
                     mode: .edit(waypoint),
@@ -2367,7 +2376,7 @@ private struct MapHomeView: View {
                     segmentToNextMiles: segmentToNextDistance(for: waypoint),
                     canEditAtCurrentLocation: canEditWaypoint(waypoint),
                     canAddAtCurrentLocation: canAddWaypoint,
-                    canDeleteWaypoint: store.canEditWaypoints(),
+                    canDeleteWaypoint: store.currentUserRole == .admin,
                     onEdit: { selected in
                         selectedMapWaypoint = nil
                         editingWaypoint = selected
@@ -2396,6 +2405,40 @@ private struct MapHomeView: View {
         StatRow(label: "Route", value: store.activeTrailName)
         StatRow(label: "Distance", value: String(format: "%.1f mi", store.activeTrailDistanceMiles))
         StatRow(label: "Elevation Gain", value: "\(store.activeTrailElevationGainFeet.formatted()) ft")
+        StatRow(label: "Pending Sync", value: "\(store.pendingWaypointOperationsCount)")
+        if store.importedTrailData?.source.cloudTrailID != nil {
+            Button("Check for updates") {
+                Task { await store.refreshTrailUpdateAvailability() }
+            }
+            .buttonStyle(.bordered)
+        }
+        if let update = store.availableTrailUpdate {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Trail update available")
+                    .font(.subheadline.weight(.semibold))
+                Text(
+                    "Added \(update.changesSummary.added) • " +
+                    "Edited \(update.changesSummary.edited) • " +
+                    "Removed \(update.changesSummary.softDeleted)"
+                )
+                .font(.footnote)
+                .foregroundColor(.secondary)
+                HStack {
+                    Button("Update now") {
+                        Task { await store.applyAvailableTrailUpdate() }
+                    }
+                    .disabled(store.isApplyingTrailUpdate)
+                    .buttonStyle(.borderedProminent)
+
+                    Button("Later") {
+                        store.deferAvailableTrailUpdate()
+                    }
+                    .disabled(store.isApplyingTrailUpdate)
+                    .buttonStyle(.bordered)
+                }
+            }
+            .padding(.vertical, 4)
+        }
         if store.importedTrailData == nil {
             Text("Import a GPX trail in Settings to enable waypoint mapping and edits.")
                 .font(.footnote)
@@ -2676,6 +2719,12 @@ private struct MapHomeView: View {
                     )
                     .font(.caption)
                     .foregroundColor(.secondary)
+                    if let seasonTag = item.waypoint.seasonTag,
+                       !seasonTag.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text("Season: \(seasonTag)")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
 
                     if let by = item.waypoint.lastEditedBy, let at = item.waypoint.lastEditedAt {
                         Text("Last edited by \(by) at \(at.formatted(date: .abbreviated, time: .shortened))")
@@ -2716,7 +2765,6 @@ private struct MapHomeView: View {
 
     private func addWaypointBlockedReason() -> String {
         if store.session == nil { return "Sign in to add waypoints." }
-        if store.currentUserRole != .admin { return "Admin role is required to add waypoints." }
         if store.importedTrailData == nil { return "Import a GPX trail first." }
         guard let location = locationTracker.latestLocation else { return "GPS location is required." }
         if store.currentUserRole == .admin { return "" }
@@ -2947,6 +2995,7 @@ private struct WaypointEditorSheet: View {
 
     @State private var name = ""
     @State private var summary = ""
+    @State private var seasonTag = ""
     @State private var type: TrailWaypointType = .waypoint
     @State private var dangerLevel: DangerLevel?
     @State private var errorMessage: String?
@@ -2971,6 +3020,8 @@ private struct WaypointEditorSheet: View {
                         Text("Medium").tag(DangerLevel.medium)
                         Text("High").tag(DangerLevel.high)
                     }
+                    TextField("Season Tag (optional)", text: $seasonTag)
+                        .textInputAutocapitalization(.words)
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Notes / Details")
                             .font(.subheadline)
@@ -3018,11 +3069,13 @@ private struct WaypointEditorSheet: View {
         case .edit(let waypoint):
             name = waypoint.name
             summary = waypoint.summary ?? ""
+            seasonTag = waypoint.seasonTag ?? ""
             type = waypoint.type
             dangerLevel = waypoint.dangerLevel
         case .add:
             name = ""
             summary = ""
+            seasonTag = ""
             type = .waypoint
             dangerLevel = nil
         }
@@ -3051,6 +3104,7 @@ private struct WaypointEditorSheet: View {
                     id: waypoint.id,
                     name: name,
                     type: type,
+                    seasonTag: normalizedSeasonTag(),
                     dangerLevel: dangerLevel,
                     summary: summary,
                     editorName: editorName
@@ -3072,6 +3126,7 @@ private struct WaypointEditorSheet: View {
                 try store.addWaypointAtCurrentLocation(
                     name: name,
                     type: type,
+                    seasonTag: normalizedSeasonTag(),
                     dangerLevel: dangerLevel,
                     summary: summary,
                     latitude: current.coordinate.latitude,
@@ -3097,6 +3152,11 @@ private struct WaypointEditorSheet: View {
             return min(best, dist)
         }
     }
+
+    private func normalizedSeasonTag() -> String? {
+        let trimmed = seasonTag.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
 }
 
 private struct WaypointDetailOverlayView: View {
@@ -3117,6 +3177,10 @@ private struct WaypointDetailOverlayView: View {
                 Section("Overview") {
                     StatRow(label: "Name", value: waypoint.name)
                     StatRow(label: "Type", value: waypoint.type.rawValue.capitalized)
+                    if let seasonTag = waypoint.seasonTag,
+                       !seasonTag.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        StatRow(label: "Season", value: seasonTag)
+                    }
                     StatRow(label: "From Start", value: String(format: "%.1f mi", waypoint.distanceFromStart))
                     StatRow(label: "To Next", value: segmentToNextMiles.map { String(format: "%.1f mi", $0) } ?? "End")
                 }
