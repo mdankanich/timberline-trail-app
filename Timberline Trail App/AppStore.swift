@@ -656,6 +656,7 @@ final class AppStore: ObservableObject {
         } else {
             safetyKeyNumbers = SafetyContent.fallback.keyNumbers
         }
+        await flushPendingWaypointOperations()
         refreshFlowState()
     }
 
@@ -804,6 +805,7 @@ final class AppStore: ObservableObject {
                     try? Self.persistImportedTrail(updated, fileManager: fileManager, defaults: defaults)
                 }
             }
+            await flushPendingWaypointOperations()
             return
         }
         if let created = await trailSyncService.upsertTrailFromImport(imported: imported, gpxHash: gpxHash),
@@ -812,6 +814,7 @@ final class AppStore: ObservableObject {
             if let updated = importedTrailData {
                 try? Self.persistImportedTrail(updated, fileManager: fileManager, defaults: defaults)
             }
+            await flushPendingWaypointOperations()
         }
     }
 
@@ -896,6 +899,22 @@ final class AppStore: ObservableObject {
             payload: payload
         )
         pendingWaypointOperations.append(operation)
+        PersistenceCodec.persist(
+            pendingWaypointOperations,
+            key: AppPersistenceKeys.pendingWaypointOperations,
+            defaults: defaults
+        )
+        pendingWaypointOperationsCount = pendingWaypointOperations.count
+    }
+
+    private func flushPendingWaypointOperations() async {
+        guard !pendingWaypointOperations.isEmpty else { return }
+        let applied = await trailSyncService.applyPendingWaypointOperations(
+            pendingWaypointOperations,
+            preferredTrailId: importedTrailData?.source.cloudTrailID
+        )
+        guard !applied.isEmpty else { return }
+        pendingWaypointOperations.removeAll { applied.contains($0.id) }
         PersistenceCodec.persist(
             pendingWaypointOperations,
             key: AppPersistenceKeys.pendingWaypointOperations,

@@ -187,6 +187,7 @@ protocol AppContentService {
 protocol TrailSyncService {
     func findTrailByGPXHash(_ gpxHash: String) async -> TrailSyncTrail?
     func upsertTrailFromImport(imported: ImportedTrailData, gpxHash: String) async -> TrailSyncTrail?
+    func applyPendingWaypointOperations(_ operations: [PendingWaypointOperation], preferredTrailId: String?) async -> Set<String>
 }
 
 enum PersistenceCodec {
@@ -434,6 +435,7 @@ final class LocalAppContentService: AppContentService {
 final class LocalTrailSyncService: TrailSyncService {
     func findTrailByGPXHash(_ gpxHash: String) async -> TrailSyncTrail? { nil }
     func upsertTrailFromImport(imported: ImportedTrailData, gpxHash: String) async -> TrailSyncTrail? { nil }
+    func applyPendingWaypointOperations(_ operations: [PendingWaypointOperation], preferredTrailId: String?) async -> Set<String> { [] }
 }
 
 #if canImport(FirebaseAuth) && canImport(FirebaseFirestore)
@@ -700,6 +702,53 @@ final class FirebaseTrailSyncService: TrailSyncService {
         } catch {
             return nil
         }
+    }
+
+    func applyPendingWaypointOperations(_ operations: [PendingWaypointOperation], preferredTrailId: String?) async -> Set<String> {
+        guard !operations.isEmpty else { return [] }
+        guard let uid = actorUID() else { return [] }
+        let email = actorEmail()
+        let db = Firestore.firestore()
+        let resolvedTrailId = preferredTrailId ?? operations.compactMap { $0.trailId }.first
+        guard let trailId = resolvedTrailId, !trailId.isEmpty else { return [] }
+
+        var applied: Set<String> = []
+        for operation in operations {
+            guard var payload = operation.payload else { continue }
+            payload.trailId = trailId
+            payload.updatedAt = Date()
+            payload.updatedByUID = uid
+            payload.updatedByEmail = email
+            if operation.action == .softDelete {
+                payload.isDeleted = true
+                payload.deletedAt = Date()
+                payload.deletedBy = email
+            }
+            guard let waypointData = FirestoreCodec.encode(payload) else { continue }
+            let change = TrailSyncWaypointChange(
+                id: "chg_" + String(UUID().uuidString.prefix(14)),
+                trailId: trailId,
+                waypointId: operation.waypointId,
+                action: operation.action,
+                seasonTag: payload.seasonTag,
+                actorUID: uid,
+                actorEmail: email,
+                changedAt: Date(),
+                clientTimestamp: operation.queuedAt,
+                previousValue: nil,
+                newValue: payload
+            )
+            guard let changeData = FirestoreCodec.encode(change) else { continue }
+
+            do {
+                try await db.collection("trails").document(trailId).collection("waypoints").document(operation.waypointId).setData(waypointData, merge: true)
+                try await db.collection("trails").document(trailId).collection("changes").document(change.id).setData(changeData, merge: false)
+                applied.insert(operation.id)
+            } catch {
+                continue
+            }
+        }
+        return applied
     }
 }
 #endif
