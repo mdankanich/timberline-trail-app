@@ -1781,13 +1781,16 @@ struct TrailMapView: UIViewRepresentable {
     let waypoints: [TrailWaypoint]
     let userLocation: CLLocation?
     let mapType: MapType
+    var allowsTapAdd: Bool = false
     var onWaypointSelected: ((TrailWaypoint) -> Void)? = nil
+    var onMapLongPressAdd: ((CLLocationCoordinate2D) -> Void)? = nil
 
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView(frame: .zero)
         mapView.showsUserLocation = true
         mapView.pointOfInterestFilter = .excludingAll
         mapView.delegate = context.coordinator
+        context.coordinator.attachLongPressRecognizer(to: mapView)
         configure(mapView)
         return mapView
     }
@@ -1862,6 +1865,12 @@ struct TrailMapView: UIViewRepresentable {
             self.parent = parent
         }
 
+        func attachLongPressRecognizer(to mapView: MKMapView) {
+            let recognizer = UILongPressGestureRecognizer(target: self, action: #selector(handleMapLongPress(_:)))
+            recognizer.minimumPressDuration = 0.45
+            mapView.addGestureRecognizer(recognizer)
+        }
+
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             guard let polyline = overlay as? MKPolyline else {
                 return MKOverlayRenderer(overlay: overlay)
@@ -1893,6 +1902,14 @@ struct TrailMapView: UIViewRepresentable {
         func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
             guard let waypointAnnotation = view.annotation as? WaypointAnnotation else { return }
             parent.onWaypointSelected?(waypointAnnotation.waypoint)
+        }
+
+        @objc private func handleMapLongPress(_ gesture: UILongPressGestureRecognizer) {
+            guard parent.allowsTapAdd else { return }
+            guard gesture.state == .began, let mapView = gesture.view as? MKMapView else { return }
+            let point = gesture.location(in: mapView)
+            let coordinate = mapView.convert(point, toCoordinateFrom: mapView)
+            parent.onMapLongPressAdd?(coordinate)
         }
 
         private func markerStyle(for type: TrailWaypointType) -> (symbol: String, tint: UIColor) {
@@ -2292,11 +2309,16 @@ private struct MapHomeView: View {
         let lossFeet: Int
     }
 
+    private struct AddWaypointContext: Identifiable {
+        let id = UUID()
+        let coordinate: CLLocationCoordinate2D?
+    }
+
     @ObservedObject var store: AppStore
     @ObservedObject var locationTracker: LocationTracker
     private let trailUpdatePollTimer = Timer.publish(every: 45, on: .main, in: .common).autoconnect()
     @State private var editingWaypoint: TrailWaypoint?
-    @State private var showingAddWaypoint = false
+    @State private var addWaypointContext: AddWaypointContext?
     @State private var trailEditError: String?
     @State private var waypointDirection: WaypointDirection = .clockwise
     @State private var isRouteSheetExpanded = false
@@ -2311,8 +2333,12 @@ private struct MapHomeView: View {
                     waypoints: store.activeTrailWaypoints,
                     userLocation: locationTracker.latestLocation,
                     mapType: store.settings.mapType,
+                    allowsTapAdd: store.currentUserRole == .admin,
                     onWaypointSelected: { waypoint in
                         selectedMapWaypoint = waypoint
+                    },
+                    onMapLongPressAdd: { coordinate in
+                        addWaypointContext = AddWaypointContext(coordinate: coordinate)
                     }
                 )
                 .frame(height: 300)
@@ -2361,9 +2387,9 @@ private struct MapHomeView: View {
                     trailEditError = message
                 }
             }
-            .sheet(isPresented: $showingAddWaypoint) {
+            .sheet(item: $addWaypointContext) { context in
                 WaypointEditorSheet(
-                    mode: .add,
+                    mode: .add(prefilledCoordinate: context.coordinate),
                     store: store,
                     locationTracker: locationTracker
                 ) { message in
@@ -2383,7 +2409,7 @@ private struct MapHomeView: View {
                     },
                     onAddAtCurrentLocation: {
                         selectedMapWaypoint = nil
-                        showingAddWaypoint = true
+                        addWaypointContext = AddWaypointContext(coordinate: nil)
                     },
                     onDelete: { selected in
                         do {
@@ -2446,8 +2472,13 @@ private struct MapHomeView: View {
         }
 
         if store.importedTrailData != nil {
+            if store.currentUserRole == .admin {
+                Text("Admin: long-press on map to add a waypoint at tapped coordinates.")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+            }
             Button("Add Waypoint At Current Location") {
-                showingAddWaypoint = true
+                addWaypointContext = AddWaypointContext(coordinate: nil)
             }
             .disabled(!canAddWaypoint)
 
@@ -2984,7 +3015,7 @@ private struct MapHomeView: View {
 private struct WaypointEditorSheet: View {
     enum Mode {
         case edit(TrailWaypoint)
-        case add
+        case add(prefilledCoordinate: CLLocationCoordinate2D?)
     }
 
     let mode: Mode
@@ -3109,18 +3140,27 @@ private struct WaypointEditorSheet: View {
                     summary: summary,
                     editorName: editorName
                 )
-            case .add:
-                guard let current = locationTracker.latestLocation else {
-                    throw NSError(domain: "TrailImport", code: 32, userInfo: [NSLocalizedDescriptionKey: "Current GPS location is required to add a waypoint."])
-                }
-                if !isAdmin {
-                    let distance = distanceToTrailMeters(
-                        from: current.coordinate,
-                        route: store.activeTrailCoordinates
-                    )
-                    guard distance <= 120 else {
-                        throw NSError(domain: "TrailImport", code: 33, userInfo: [NSLocalizedDescriptionKey: "Move closer to the trail to add a waypoint."])
+            case .add(let prefilledCoordinate):
+                let targetCoordinate: CLLocationCoordinate2D
+                if let prefilledCoordinate {
+                    guard isAdmin else {
+                        throw NSError(domain: "TrailImport", code: 34, userInfo: [NSLocalizedDescriptionKey: "Only admin can add waypoints by tapping the map."])
                     }
+                    targetCoordinate = prefilledCoordinate
+                } else {
+                    guard let current = locationTracker.latestLocation else {
+                        throw NSError(domain: "TrailImport", code: 32, userInfo: [NSLocalizedDescriptionKey: "Current GPS location is required to add a waypoint."])
+                    }
+                    if !isAdmin {
+                        let distance = distanceToTrailMeters(
+                            from: current.coordinate,
+                            route: store.activeTrailCoordinates
+                        )
+                        guard distance <= 120 else {
+                            throw NSError(domain: "TrailImport", code: 33, userInfo: [NSLocalizedDescriptionKey: "Move closer to the trail to add a waypoint."])
+                        }
+                    }
+                    targetCoordinate = current.coordinate
                 }
 
                 try store.addWaypointAtCurrentLocation(
@@ -3129,8 +3169,8 @@ private struct WaypointEditorSheet: View {
                     seasonTag: normalizedSeasonTag(),
                     dangerLevel: dangerLevel,
                     summary: summary,
-                    latitude: current.coordinate.latitude,
-                    longitude: current.coordinate.longitude,
+                    latitude: targetCoordinate.latitude,
+                    longitude: targetCoordinate.longitude,
                     editorName: editorName
                 )
             }
