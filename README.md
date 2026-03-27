@@ -3,6 +3,7 @@
 - [CI Release Setup](CI_APP_STORE_RELEASE.md)
 - [Release Checklist](RELEASE_CHECKLIST.md)
 - [Mobile Design Standards](MOBILE_DESIGN_STANDARDS.md)
+- [Firestore Trail Sync Schema](FIRESTORE_TRAIL_SYNC_SCHEMA.md)
 
 ## Version Bump
 

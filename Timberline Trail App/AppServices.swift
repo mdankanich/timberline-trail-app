@@ -21,6 +21,79 @@ struct TripsSnapshot: Codable, Hashable {
     var importedTrailData: ImportedTrailData?
 }
 
+// MARK: - Trail Sync Models (Step 1 schema foundation)
+
+enum WaypointChangeAction: String, Codable, Hashable {
+    case add
+    case edit
+    case softDelete
+}
+
+struct TrailSyncWaypoint: Codable, Hashable, Identifiable {
+    var id: String
+    var trailId: String
+    var name: String
+    var type: TrailWaypointType
+    var dangerLevel: DangerLevel?
+    var summary: String?
+    var distanceFromStart: Double
+    var latitude: Double
+    var longitude: Double
+    var seasonTag: String?
+    var isDeleted: Bool
+    var deletedAt: Date?
+    var deletedBy: String?
+    var updatedAt: Date
+    var updatedByUID: String
+    var updatedByEmail: String?
+}
+
+struct TrailSyncWaypointChange: Codable, Hashable, Identifiable {
+    var id: String
+    var trailId: String
+    var waypointId: String
+    var action: WaypointChangeAction
+    var seasonTag: String?
+    var actorUID: String
+    var actorEmail: String?
+    var changedAt: Date
+    var clientTimestamp: Date?
+    var previousValue: TrailSyncWaypoint?
+    var newValue: TrailSyncWaypoint?
+}
+
+struct TrailSyncVersion: Codable, Hashable, Identifiable {
+    var id: String
+    var trailId: String
+    var baseVersionId: String?
+    var fileName: String
+    var gpxHash: String
+    var routePointCount: Int
+    var waypointCount: Int
+    var createdAt: Date
+    var createdByUID: String
+    var createdByEmail: String?
+    var changesSummary: TrailSyncChangesSummary
+}
+
+struct TrailSyncChangesSummary: Codable, Hashable {
+    var added: Int
+    var edited: Int
+    var softDeleted: Int
+}
+
+struct TrailSyncTrail: Codable, Hashable, Identifiable {
+    var id: String
+    var name: String
+    var currentVersionId: String
+    var sourceFileName: String
+    var sourceGPXHash: String
+    var lastSyncedAt: Date
+    var updatedAt: Date
+    var updatedByUID: String
+    var updatedByEmail: String?
+}
+
 enum AppPersistenceKeys {
     static let users = "phase1_users"
     static let session = "phase1_session"
