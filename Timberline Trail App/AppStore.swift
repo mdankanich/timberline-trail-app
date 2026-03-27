@@ -54,6 +54,7 @@ final class AppStore: ObservableObject {
     private let userService: UserService
     private let tripService: TripService
     private let appContentService: AppContentService
+    private let trailSyncService: TrailSyncService
     private let defaults = UserDefaults.standard
     private let fileManager = FileManager.default
 
@@ -63,6 +64,7 @@ final class AppStore: ObservableObject {
         self.userService = environment.userService
         self.tripService = environment.tripService
         self.appContentService = environment.appContentService
+        self.trailSyncService = environment.trailSyncService
 
         let initialProfile = environment.userService.loadLocalProfile()
         let initialSession = environment.authService.currentSession()
@@ -384,10 +386,13 @@ final class AppStore: ObservableObject {
             }
         }
         let xml = try String(contentsOf: url, encoding: .utf8)
-        let imported = try importedTrailDataFromGPX(xml: xml, fileName: url.lastPathComponent)
+        var imported = try importedTrailDataFromGPX(xml: xml, fileName: url.lastPathComponent)
+        let gpxHash = sha256(xml)
+        imported.source.gpxHash = gpxHash
         importedTrailData = imported
         try Self.persistImportedTrail(imported, fileManager: fileManager, defaults: defaults)
         persistTrips()
+        Task { await syncImportedTrailToCloud(imported, gpxHash: gpxHash) }
     }
 
     func resetImportedTrail() {
@@ -771,6 +776,25 @@ final class AppStore: ObservableObject {
     private func sha256(_ input: String) -> String {
         let hashed = SHA256.hash(data: Data(input.utf8))
         return hashed.compactMap { String(format: "%02x", $0) }.joined()
+    }
+
+    private func syncImportedTrailToCloud(_ imported: ImportedTrailData, gpxHash: String) async {
+        if let existing = await trailSyncService.findTrailByGPXHash(gpxHash) {
+            if importedTrailData?.source.gpxHash == gpxHash {
+                importedTrailData?.source.cloudTrailID = existing.id
+                if let updated = importedTrailData {
+                    try? Self.persistImportedTrail(updated, fileManager: fileManager, defaults: defaults)
+                }
+            }
+            return
+        }
+        if let created = await trailSyncService.upsertTrailFromImport(imported: imported, gpxHash: gpxHash),
+           importedTrailData?.source.gpxHash == gpxHash {
+            importedTrailData?.source.cloudTrailID = created.id
+            if let updated = importedTrailData {
+                try? Self.persistImportedTrail(updated, fileManager: fileManager, defaults: defaults)
+            }
+        }
     }
 
     private func randomNonceString(length: Int = 32) -> String {

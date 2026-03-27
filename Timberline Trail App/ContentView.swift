@@ -325,10 +325,12 @@ struct Campsite: Identifiable, Codable, Hashable {
 }
 
 struct ImportedTrailSourceInfo: Codable, Hashable {
-    let format: String
-    let fileName: String
-    let generatedAt: Date
-    let overlayApplied: String?
+    var format: String
+    var fileName: String
+    var generatedAt: Date
+    var overlayApplied: String?
+    var gpxHash: String? = nil
+    var cloudTrailID: String? = nil
 }
 
 struct ImportedTrailData: Codable, Hashable {

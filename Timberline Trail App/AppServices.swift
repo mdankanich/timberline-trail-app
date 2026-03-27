@@ -173,6 +173,11 @@ protocol AppContentService {
     func fetchSafetyContent() async -> SafetyContent?
 }
 
+protocol TrailSyncService {
+    func findTrailByGPXHash(_ gpxHash: String) async -> TrailSyncTrail?
+    func upsertTrailFromImport(imported: ImportedTrailData, gpxHash: String) async -> TrailSyncTrail?
+}
+
 enum PersistenceCodec {
     static func persist<T: Encodable>(_ value: T?, key: String, defaults: UserDefaults) {
         if value == nil {
@@ -415,6 +420,11 @@ final class LocalAppContentService: AppContentService {
     func fetchSafetyContent() async -> SafetyContent? { nil }
 }
 
+final class LocalTrailSyncService: TrailSyncService {
+    func findTrailByGPXHash(_ gpxHash: String) async -> TrailSyncTrail? { nil }
+    func upsertTrailFromImport(imported: ImportedTrailData, gpxHash: String) async -> TrailSyncTrail? { nil }
+}
+
 #if canImport(FirebaseAuth) && canImport(FirebaseFirestore)
 enum FirestoreCodec {
     static func encode<T: Encodable>(_ value: T) -> [String: Any]? {
@@ -578,6 +588,109 @@ final class FirebaseAppContentService: AppContentService {
         }
     }
 }
+
+final class FirebaseTrailSyncService: TrailSyncService {
+    private func actorUID() -> String? { Auth.auth().currentUser?.uid }
+    private func actorEmail() -> String? { Auth.auth().currentUser?.email }
+
+    func findTrailByGPXHash(_ gpxHash: String) async -> TrailSyncTrail? {
+        do {
+            let query = try await Firestore.firestore()
+                .collection("trails")
+                .whereField("sourceGPXHash", isEqualTo: gpxHash)
+                .limit(to: 1)
+                .getDocuments()
+            guard let document = query.documents.first else { return nil }
+            var decoded: TrailSyncTrail? = FirestoreCodec.decode(document.data())
+            if decoded?.id.isEmpty ?? true {
+                decoded?.id = document.documentID
+            }
+            return decoded
+        } catch {
+            return nil
+        }
+    }
+
+    func upsertTrailFromImport(imported: ImportedTrailData, gpxHash: String) async -> TrailSyncTrail? {
+        if let existing = await findTrailByGPXHash(gpxHash) {
+            return existing
+        }
+
+        guard let uid = actorUID() else { return nil }
+        let email = actorEmail()
+        let now = Date()
+        let trailId = "trail_" + String(gpxHash.prefix(16))
+        let versionId = "ver_" + String(UUID().uuidString.prefix(12))
+        let summary = TrailSyncChangesSummary(
+            added: imported.waypoints.count,
+            edited: 0,
+            softDeleted: 0
+        )
+        let trail = TrailSyncTrail(
+            id: trailId,
+            name: imported.name,
+            currentVersionId: versionId,
+            sourceFileName: imported.source.fileName,
+            sourceGPXHash: gpxHash,
+            lastSyncedAt: now,
+            updatedAt: now,
+            updatedByUID: uid,
+            updatedByEmail: email
+        )
+        let version = TrailSyncVersion(
+            id: versionId,
+            trailId: trailId,
+            baseVersionId: nil,
+            fileName: imported.source.fileName,
+            gpxHash: gpxHash,
+            routePointCount: imported.coordinates.count,
+            waypointCount: imported.waypoints.count,
+            createdAt: now,
+            createdByUID: uid,
+            createdByEmail: email,
+            changesSummary: summary
+        )
+
+        guard
+            let trailData = FirestoreCodec.encode(trail),
+            let versionData = FirestoreCodec.encode(version)
+        else { return nil }
+
+        do {
+            let db = Firestore.firestore()
+            try await db.collection("trails").document(trailId).setData(trailData, merge: true)
+            try await db.collection("trails").document(trailId).collection("versions").document(versionId).setData(versionData, merge: true)
+
+            for waypoint in imported.waypoints {
+                guard let latitude = waypoint.latitude, let longitude = waypoint.longitude else { continue }
+                let syncWaypoint = TrailSyncWaypoint(
+                    id: waypoint.id,
+                    trailId: trailId,
+                    name: waypoint.name,
+                    type: waypoint.type,
+                    dangerLevel: waypoint.dangerLevel,
+                    summary: waypoint.summary,
+                    distanceFromStart: waypoint.distanceFromStart,
+                    latitude: latitude,
+                    longitude: longitude,
+                    seasonTag: nil,
+                    isDeleted: false,
+                    deletedAt: nil,
+                    deletedBy: nil,
+                    updatedAt: now,
+                    updatedByUID: uid,
+                    updatedByEmail: email
+                )
+                guard let waypointData = FirestoreCodec.encode(syncWaypoint) else { continue }
+                try await db.collection("trails").document(trailId).collection("waypoints").document(waypoint.id).setData(waypointData, merge: true)
+            }
+
+            return trail
+        } catch {
+            return nil
+        }
+    }
+}
 #endif
 
 final class CompositeUserService: UserService {
@@ -620,6 +733,7 @@ struct AppEnvironment {
     let userService: UserService
     let tripService: TripService
     let appContentService: AppContentService
+    let trailSyncService: TrailSyncService
 }
 
 extension AppEnvironment {
@@ -638,10 +752,12 @@ extension AppEnvironment {
         let user: UserService = CompositeUserService(local: localUser, remote: FirebaseUserCloudService())
         let trip: TripService = CompositeTripService(local: localTrip, remote: FirebaseTripCloudService())
         let content: AppContentService = FirebaseAppContentService()
+        let trailSync: TrailSyncService = FirebaseTrailSyncService()
 #else
         let user: UserService = CompositeUserService(local: localUser, remote: nil)
         let trip: TripService = CompositeTripService(local: localTrip, remote: nil)
         let content: AppContentService = LocalAppContentService()
+        let trailSync: TrailSyncService = LocalTrailSyncService()
 #endif
 
         return AppEnvironment(
@@ -649,7 +765,8 @@ extension AppEnvironment {
             settingsService: localSettings,
             userService: user,
             tripService: trip,
-            appContentService: content
+            appContentService: content,
+            trailSyncService: trailSync
         )
     }
 }

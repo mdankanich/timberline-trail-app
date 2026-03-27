@@ -46,3 +46,7 @@ xcodebuild -project 'Timberline Trail App.xcodeproj' -scheme 'Timberline Trail A
 - When `FirebaseFirestore` is also linked, profile/trips sync to Firestore under:
   - `users/{uid}/data/profile`
   - `users/{uid}/data/trips`
+- Step 2 trail import sync also writes shared trail data under:
+  - `trails/{trailId}`
+  - `trails/{trailId}/versions/{versionId}`
+  - `trails/{trailId}/waypoints/{waypointId}`
