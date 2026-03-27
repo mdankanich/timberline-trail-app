@@ -45,6 +45,7 @@ final class AppStore: ObservableObject {
     @Published private(set) var flowState: AppFlowState
     @Published private(set) var safetyKeyNumbers: [SafetyKeyNumber]
     @Published private(set) var importedTrailData: ImportedTrailData?
+    @Published private(set) var pendingWaypointOperationsCount: Int
 
     private var backgroundedAt: Date?
     private var currentNonce: String?
@@ -57,6 +58,7 @@ final class AppStore: ObservableObject {
     private let trailSyncService: TrailSyncService
     private let defaults = UserDefaults.standard
     private let fileManager = FileManager.default
+    private var pendingWaypointOperations: [PendingWaypointOperation]
 
     init(environment: AppEnvironment = .live()) {
         self.authService = environment.authService
@@ -72,6 +74,11 @@ final class AppStore: ObservableObject {
         self.profile = initialProfile
         self.safetyKeyNumbers = SafetyContent.fallback.keyNumbers
         self.importedTrailData = Self.loadImportedTrail(defaults: defaults)
+        self.pendingWaypointOperations = PersistenceCodec.load(
+            [PendingWaypointOperation].self,
+            key: AppPersistenceKeys.pendingWaypointOperations,
+            defaults: defaults
+        ) ?? []
 
         let tripSnapshot = environment.tripService.loadLocalTrips()
         self.trips = tripSnapshot.trips
@@ -82,6 +89,7 @@ final class AppStore: ObservableObject {
         self.authInfoMessage = nil
         self.isAuthLoading = false
         self.flowState = deriveAppFlowState(session: initialSession, profile: initialProfile)
+        self.pendingWaypointOperationsCount = self.pendingWaypointOperations.count
 
         if session != nil {
             Task { await refreshFromCloud() }
@@ -403,7 +411,7 @@ final class AppStore: ObservableObject {
     }
 
     func canEditWaypoints() -> Bool {
-        session != nil && importedTrailData != nil && currentUserRole == .admin
+        session != nil && importedTrailData != nil
     }
 
     func updateWaypoint(
@@ -415,7 +423,7 @@ final class AppStore: ObservableObject {
         editorName: String
     ) throws {
         guard canEditWaypoints(), var imported = importedTrailData else {
-            throw NSError(domain: "TrailImport", code: 20, userInfo: [NSLocalizedDescriptionKey: "Admin role and imported GPX trail are required before editing waypoints."])
+            throw NSError(domain: "TrailImport", code: 20, userInfo: [NSLocalizedDescriptionKey: "Sign in and import a GPX trail before editing waypoints."])
         }
         guard let index = imported.waypoints.firstIndex(where: { $0.id == id }) else {
             throw NSError(domain: "TrailImport", code: 21, userInfo: [NSLocalizedDescriptionKey: "Waypoint not found."])
@@ -429,10 +437,12 @@ final class AppStore: ObservableObject {
         imported.waypoints[index].lastEditedBy = editorName
         imported.waypoints[index].lastEditedAt = Date()
         imported.waypoints.sort { $0.distanceFromStart < $1.distanceFromStart }
+        let updatedWaypoint = imported.waypoints[index]
 
         importedTrailData = imported
         try Self.persistImportedTrail(imported, fileManager: fileManager, defaults: defaults)
         persistTrips()
+        enqueuePendingWaypointOperation(action: .edit, waypoint: updatedWaypoint)
     }
 
     func addWaypointAtCurrentLocation(
@@ -445,7 +455,7 @@ final class AppStore: ObservableObject {
         editorName: String
     ) throws {
         guard canEditWaypoints(), var imported = importedTrailData else {
-            throw NSError(domain: "TrailImport", code: 22, userInfo: [NSLocalizedDescriptionKey: "Admin role and imported GPX trail are required before adding waypoints."])
+            throw NSError(domain: "TrailImport", code: 22, userInfo: [NSLocalizedDescriptionKey: "Sign in and import a GPX trail before adding waypoints."])
         }
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else {
@@ -476,15 +486,17 @@ final class AppStore: ObservableObject {
         importedTrailData = imported
         try Self.persistImportedTrail(imported, fileManager: fileManager, defaults: defaults)
         persistTrips()
+        enqueuePendingWaypointOperation(action: .add, waypoint: waypoint)
     }
 
     func deleteWaypoint(id: String) throws {
-        guard canEditWaypoints(), var imported = importedTrailData else {
-            throw NSError(domain: "TrailImport", code: 24, userInfo: [NSLocalizedDescriptionKey: "Admin role and imported GPX trail are required before deleting waypoints."])
+        guard canEditWaypoints(), var imported = importedTrailData, currentUserRole == .admin else {
+            throw NSError(domain: "TrailImport", code: 24, userInfo: [NSLocalizedDescriptionKey: "Admin role is required before deleting waypoints."])
         }
         guard imported.waypoints.contains(where: { $0.id == id }) else {
             throw NSError(domain: "TrailImport", code: 25, userInfo: [NSLocalizedDescriptionKey: "Waypoint not found."])
         }
+        let deletedWaypoint = imported.waypoints.first(where: { $0.id == id })
 
         imported.waypoints.removeAll { $0.id == id }
         imported.waypoints.sort { $0.distanceFromStart < $1.distanceFromStart }
@@ -492,6 +504,9 @@ final class AppStore: ObservableObject {
         importedTrailData = imported
         try Self.persistImportedTrail(imported, fileManager: fileManager, defaults: defaults)
         persistTrips()
+        if let deletedWaypoint {
+            enqueuePendingWaypointOperation(action: .softDelete, waypoint: deletedWaypoint)
+        }
     }
 
     private static func loadImportedTrail(defaults: UserDefaults) -> ImportedTrailData? {
@@ -658,9 +673,12 @@ final class AppStore: ObservableObject {
         authInfoMessage = nil
         currentNonce = nil
         importedTrailData = nil
+        pendingWaypointOperations = []
+        pendingWaypointOperationsCount = 0
         userService.clearLocalProfile()
         tripService.clearLocalTrips()
         defaults.removeObject(forKey: AppPersistenceKeys.importedTrail)
+        defaults.removeObject(forKey: AppPersistenceKeys.pendingWaypointOperations)
         Self.removePersistedImportedTrail(fileManager: fileManager)
         refreshFlowState()
     }
@@ -845,5 +863,44 @@ final class AppStore: ObservableObject {
             return nil
         }
         return value
+    }
+
+    private func enqueuePendingWaypointOperation(action: WaypointChangeAction, waypoint: TrailWaypoint) {
+        let latitude = waypoint.latitude ?? 0
+        let longitude = waypoint.longitude ?? 0
+        let payload = TrailSyncWaypoint(
+            id: waypoint.id,
+            trailId: importedTrailData?.source.cloudTrailID ?? importedTrailData?.source.gpxHash ?? "local",
+            name: waypoint.name,
+            type: waypoint.type,
+            dangerLevel: waypoint.dangerLevel,
+            summary: waypoint.summary,
+            distanceFromStart: waypoint.distanceFromStart,
+            latitude: latitude,
+            longitude: longitude,
+            seasonTag: nil,
+            isDeleted: action == .softDelete,
+            deletedAt: action == .softDelete ? Date() : nil,
+            deletedBy: action == .softDelete ? (profile?.name ?? session?.email) : nil,
+            updatedAt: Date(),
+            updatedByUID: session?.email ?? "local-user",
+            updatedByEmail: session?.email
+        )
+        let operation = PendingWaypointOperation(
+            id: "op_" + String(UUID().uuidString.prefix(12)),
+            trailId: importedTrailData?.source.cloudTrailID,
+            waypointId: waypoint.id,
+            action: action,
+            queuedAt: Date(),
+            actorEmail: session?.email,
+            payload: payload
+        )
+        pendingWaypointOperations.append(operation)
+        PersistenceCodec.persist(
+            pendingWaypointOperations,
+            key: AppPersistenceKeys.pendingWaypointOperations,
+            defaults: defaults
+        )
+        pendingWaypointOperationsCount = pendingWaypointOperations.count
     }
 }

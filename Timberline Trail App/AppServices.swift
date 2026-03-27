@@ -94,6 +94,16 @@ struct TrailSyncTrail: Codable, Hashable, Identifiable {
     var updatedByEmail: String?
 }
 
+struct PendingWaypointOperation: Codable, Hashable, Identifiable {
+    var id: String
+    var trailId: String?
+    var waypointId: String
+    var action: WaypointChangeAction
+    var queuedAt: Date
+    var actorEmail: String?
+    var payload: TrailSyncWaypoint?
+}
+
 enum AppPersistenceKeys {
     static let users = "phase1_users"
     static let session = "phase1_session"
@@ -102,6 +112,7 @@ enum AppPersistenceKeys {
     static let trips = "phase1_trips"
     static let activeTripID = "phase1_active_trip_id"
     static let importedTrail = "phase1_imported_trail"
+    static let pendingWaypointOperations = "phase1_pending_waypoint_operations"
 }
 
 enum AuthServiceError: LocalizedError, Equatable {

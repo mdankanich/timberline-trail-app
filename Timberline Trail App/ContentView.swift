@@ -2369,7 +2369,7 @@ private struct MapHomeView: View {
                     segmentToNextMiles: segmentToNextDistance(for: waypoint),
                     canEditAtCurrentLocation: canEditWaypoint(waypoint),
                     canAddAtCurrentLocation: canAddWaypoint,
-                    canDeleteWaypoint: store.canEditWaypoints(),
+                    canDeleteWaypoint: store.currentUserRole == .admin,
                     onEdit: { selected in
                         selectedMapWaypoint = nil
                         editingWaypoint = selected
@@ -2718,7 +2718,6 @@ private struct MapHomeView: View {
 
     private func addWaypointBlockedReason() -> String {
         if store.session == nil { return "Sign in to add waypoints." }
-        if store.currentUserRole != .admin { return "Admin role is required to add waypoints." }
         if store.importedTrailData == nil { return "Import a GPX trail first." }
         guard let location = locationTracker.latestLocation else { return "GPS location is required." }
         if store.currentUserRole == .admin { return "" }
