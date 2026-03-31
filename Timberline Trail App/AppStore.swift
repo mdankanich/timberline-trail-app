@@ -28,6 +28,73 @@ func deriveAppFlowState(session: AuthSession?, profile: UserProfile?) -> AppFlow
     return .ready
 }
 
+func normalizeSeasonTagForMigration(_ seasonTag: String?) -> String? {
+    guard let trimmed = seasonTag?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+        return nil
+    }
+    return trimmed
+}
+
+func defaultMutationID() -> String {
+    "mut_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+}
+
+func migratePendingWaypointOperationV1(
+    _ operation: PendingWaypointOperation,
+    now: Date,
+    mutationIDGenerator: () -> String = defaultMutationID
+) -> PendingWaypointOperation {
+    var updated = operation
+    if updated.mutationID?.isEmpty ?? true {
+        updated.mutationID = mutationIDGenerator()
+    }
+    if updated.retryCount == nil {
+        updated.retryCount = 0
+    }
+    if (updated.retryCount ?? 0) > 0 {
+        if updated.lastAttemptAt == nil {
+            updated.lastAttemptAt = updated.queuedAt
+        }
+        if updated.nextAttemptAt == nil {
+            updated.nextAttemptAt = now
+        }
+        if updated.lastError == nil {
+            updated.lastError = "Recovered legacy retry metadata"
+        }
+    }
+    return updated
+}
+
+func sanitizeSyncTelemetryEventsV1(_ events: [SyncTelemetryEvent], maxCount: Int = 120) -> [SyncTelemetryEvent] {
+    var result = events.filter { !$0.details.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    if result.count > maxCount {
+        result.removeFirst(result.count - maxCount)
+    }
+    return result
+}
+
+func duePendingWaypointOperations(
+    _ operations: [PendingWaypointOperation],
+    now: Date,
+    limit: Int = 50
+) -> [PendingWaypointOperation] {
+    Array(operations.filter { operation in
+        guard let nextAttemptAt = operation.nextAttemptAt else { return true }
+        return nextAttemptAt <= now
+    }.prefix(limit))
+}
+
+func retryBackoffInterval(attempt: Int, jitter: Int) -> TimeInterval {
+    let cappedAttempt = min(max(1, attempt), 8)
+    let base = pow(2.0, Double(cappedAttempt - 1)) * 5.0
+    let boundedJitter = Double(min(max(0, jitter), 3))
+    return min(base + boundedJitter, 15 * 60)
+}
+
+func shouldShowTrailUpdate(versionId: String, dismissedVersion: String?) -> Bool {
+    dismissedVersion != versionId
+}
+
 @MainActor
 final class AppStore: ObservableObject {
     private static let adminEmailAllowlist: Set<String> = [
@@ -968,34 +1035,16 @@ final class AppStore: ObservableObject {
         if var imported = importedTrailData {
             imported.waypoints = imported.waypoints.map { waypoint in
                 var updated = waypoint
-                let season = updated.seasonTag?.trimmingCharacters(in: .whitespacesAndNewlines)
-                updated.seasonTag = (season?.isEmpty == true) ? nil : season
+                updated.seasonTag = normalizeSeasonTagForMigration(updated.seasonTag)
                 return updated
             }
             importedTrailData = imported
             try? Self.persistImportedTrail(imported, fileManager: fileManager, defaults: defaults)
         }
 
+        let migrationNow = Date()
         pendingWaypointOperations = pendingWaypointOperations.map { operation in
-            var updated = operation
-            if updated.mutationID?.isEmpty ?? true {
-                updated.mutationID = "mut_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
-            }
-            if updated.retryCount == nil {
-                updated.retryCount = 0
-            }
-            if (updated.retryCount ?? 0) > 0 {
-                if updated.lastAttemptAt == nil {
-                    updated.lastAttemptAt = updated.queuedAt
-                }
-                if updated.nextAttemptAt == nil {
-                    updated.nextAttemptAt = Date()
-                }
-                if updated.lastError == nil {
-                    updated.lastError = "Recovered legacy retry metadata"
-                }
-            }
-            return updated
+            migratePendingWaypointOperationV1(operation, now: migrationNow)
         }
         PersistenceCodec.persist(
             pendingWaypointOperations,
@@ -1003,11 +1052,7 @@ final class AppStore: ObservableObject {
             defaults: defaults
         )
 
-        syncTelemetryEvents = syncTelemetryEvents
-            .filter { !$0.details.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        if syncTelemetryEvents.count > 120 {
-            syncTelemetryEvents.removeFirst(syncTelemetryEvents.count - 120)
-        }
+        syncTelemetryEvents = sanitizeSyncTelemetryEventsV1(syncTelemetryEvents)
         PersistenceCodec.persist(
             syncTelemetryEvents,
             key: AppPersistenceKeys.syncTelemetryEvents,
@@ -1068,11 +1113,7 @@ final class AppStore: ObservableObject {
         defer { isFlushingPendingWaypointOperations = false }
 
         let now = Date()
-        let dueOperations = pendingWaypointOperations.filter { operation in
-            guard let nextAttemptAt = operation.nextAttemptAt else { return true }
-            return nextAttemptAt <= now
-        }
-        .prefix(50)
+        let dueOperations = duePendingWaypointOperations(pendingWaypointOperations, now: now, limit: 50)
         guard !dueOperations.isEmpty else {
             recordSyncEvent(.flushSkipped, details: "No due operations to sync")
             return
@@ -1080,7 +1121,7 @@ final class AppStore: ObservableObject {
         recordSyncEvent(.flushStarted, details: "Attempting sync for \(dueOperations.count) ops")
 
         let applied = await trailSyncService.applyPendingWaypointOperations(
-            Array(dueOperations),
+            dueOperations,
             preferredTrailId: importedTrailData?.source.cloudTrailID
         )
         let attemptedIds = Set(dueOperations.map(\.id))
@@ -1099,7 +1140,7 @@ final class AppStore: ObservableObject {
                 updated.retryCount = nextRetryCount
                 updated.lastAttemptAt = now
                 updated.lastError = "Sync retry scheduled"
-                updated.nextAttemptAt = now.addingTimeInterval(retryBackoffInterval(attempt: nextRetryCount))
+                updated.nextAttemptAt = now.addingTimeInterval(randomizedRetryBackoffInterval(attempt: nextRetryCount))
                 return updated
             }
             let retryCount = attemptedIds.subtracting(applied).count
@@ -1117,11 +1158,8 @@ final class AppStore: ObservableObject {
         syncFailureCount = pendingWaypointOperations.filter { ($0.retryCount ?? 0) > 0 }.count
     }
 
-    private func retryBackoffInterval(attempt: Int) -> TimeInterval {
-        let cappedAttempt = min(max(1, attempt), 8)
-        let base = pow(2.0, Double(cappedAttempt - 1)) * 5.0
-        let jitter = Double(Int.random(in: 0...3))
-        return min(base + jitter, 15 * 60)
+    private func randomizedRetryBackoffInterval(attempt: Int) -> TimeInterval {
+        retryBackoffInterval(attempt: attempt, jitter: Int.random(in: 0...3))
     }
 
     private func checkForTrailUpdate() async {
@@ -1135,7 +1173,7 @@ final class AppStore: ObservableObject {
             return
         }
         let dismissedVersion = defaults.string(forKey: AppPersistenceKeys.dismissedTrailUpdateVersion)
-        if dismissedVersion == update.versionId {
+        if !shouldShowTrailUpdate(versionId: update.versionId, dismissedVersion: dismissedVersion) {
             availableTrailUpdate = nil
             return
         }
