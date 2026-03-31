@@ -3572,7 +3572,9 @@ private struct SafetyHubView: View {
     }
 
     private func triggerSOS() {
-        openURL(URL(string: "tel:911")!)
+        if let emergencyURL = URL(string: "tel:911") {
+            openURL(emergencyURL)
+        }
         let coordinate = locationTracker.latestLocation?.coordinate
         let lat = coordinate?.latitude ?? 0
         let lon = coordinate?.longitude ?? 0
