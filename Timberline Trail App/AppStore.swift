@@ -528,7 +528,8 @@ final class AppStore: ObservableObject {
         importedTrailData = imported
         try Self.persistImportedTrail(imported, fileManager: fileManager, defaults: defaults)
         persistTrips()
-        Task { await syncImportedTrailToCloud(imported, gpxHash: gpxHash) }
+        let importedSnapshot = imported
+        Task { await syncImportedTrailToCloud(importedSnapshot, gpxHash: gpxHash) }
     }
 
     func deferAvailableTrailUpdate() {
@@ -685,7 +686,7 @@ final class AppStore: ObservableObject {
         importedTrailData = imported
         try Self.persistImportedTrail(imported, fileManager: fileManager, defaults: defaults)
         persistTrips()
-        if let deletedWaypoint {
+        if let deletedWaypoint = deletedWaypoint {
             enqueuePendingWaypointOperation(action: .softDelete, waypoint: deletedWaypoint)
         }
     }
@@ -938,9 +939,8 @@ final class AppStore: ObservableObject {
     }
 
     private func mapAppleAuthorizationError(_ error: Error) -> String {
-        let nsError = error as NSError
-        if let code = ASAuthorizationError.Code(rawValue: nsError.code) {
-            switch code {
+        if let appleError = error as? ASAuthorizationError {
+            switch appleError.code {
             case .canceled:
                 return "Apple Sign In was canceled."
             case .failed:
@@ -949,12 +949,14 @@ final class AppStore: ObservableObject {
                 return "Apple Sign In returned an invalid response."
             case .notHandled:
                 return "Apple Sign In request was not handled."
+            case .unknown:
+                return "Apple Sign In encountered an unknown error."
             default:
                 return "Apple Sign In failed."
             }
         }
 
-        let message = nsError.localizedDescription
+        let message = (error as NSError).localizedDescription
         return message.isEmpty ? "Apple Sign In failed." : message
     }
 

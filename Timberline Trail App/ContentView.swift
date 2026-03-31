@@ -3148,7 +3148,7 @@ private struct WaypointEditorSheet: View {
                 )
             case .add(let prefilledCoordinate):
                 let targetCoordinate: CLLocationCoordinate2D
-                if let prefilledCoordinate {
+                if let prefilledCoordinate = prefilledCoordinate {
                     guard isAdmin else {
                         throw NSError(domain: "TrailImport", code: 34, userInfo: [NSLocalizedDescriptionKey: "Only admin can add waypoints by tapping the map."])
                     }
