@@ -23,6 +23,7 @@ Suggested fields:
 - `currentVersionId` (string)
 - `sourceFileName` (string)
 - `sourceGPXHash` (string)
+- `routePoints` (array of `{ latitude, longitude }`) sampled route geometry for server-side on-trail validation
 - `lastSyncedAt` (timestamp)
 - `updatedAt` (timestamp)
 - `updatedByUID` (string)
@@ -149,3 +150,11 @@ service cloud.firestore {
 - Server is source of truth for shared state.
 - Merge policy for current state: last-write-wins.
 - Historical fidelity: every mutation appended to `changes`.
+
+## Server Validator Endpoint
+
+- Callable function: `submitWaypointMutation`
+- Validates mutation payload and actor role.
+- Enforces admin-only soft delete.
+- Enforces non-admin on-trail proximity against `trails/{trailId}.routePoints`.
+- Writes waypoint + change entry transactionally.
