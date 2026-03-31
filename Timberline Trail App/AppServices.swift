@@ -125,6 +125,24 @@ struct TrailRemoteUpdateInfo: Codable, Hashable {
     var changesSummary: TrailSyncChangesSummary
 }
 
+enum SyncTelemetryEventType: String, Codable, Hashable {
+    case enqueue
+    case flushStarted
+    case flushSucceeded
+    case flushRetried
+    case flushSkipped
+    case cloudImportLinked
+    case updateAvailable
+    case updateApplied
+}
+
+struct SyncTelemetryEvent: Codable, Hashable, Identifiable {
+    var id: String
+    var type: SyncTelemetryEventType
+    var createdAt: Date
+    var details: String
+}
+
 enum AppPersistenceKeys {
     static let users = "phase1_users"
     static let session = "phase1_session"
@@ -135,6 +153,7 @@ enum AppPersistenceKeys {
     static let importedTrail = "phase1_imported_trail"
     static let pendingWaypointOperations = "phase1_pending_waypoint_operations"
     static let dismissedTrailUpdateVersion = "phase1_dismissed_trail_update_version"
+    static let syncTelemetryEvents = "phase1_sync_telemetry_events"
 }
 
 enum AuthServiceError: LocalizedError, Equatable {
