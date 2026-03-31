@@ -154,6 +154,7 @@ enum AppPersistenceKeys {
     static let pendingWaypointOperations = "phase1_pending_waypoint_operations"
     static let dismissedTrailUpdateVersion = "phase1_dismissed_trail_update_version"
     static let syncTelemetryEvents = "phase1_sync_telemetry_events"
+    static let dataSchemaVersion = "phase1_data_schema_version"
 }
 
 enum AuthServiceError: LocalizedError, Equatable {

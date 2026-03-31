@@ -33,6 +33,7 @@ final class AppStore: ObservableObject {
     private static let adminEmailAllowlist: Set<String> = [
         "mdankanich@slovo.org"
     ]
+    private static let localDataSchemaVersion = 1
 
     @Published private(set) var session: AuthSession?
     @Published private(set) var profile: UserProfile?
@@ -103,6 +104,9 @@ final class AppStore: ObservableObject {
         self.pendingWaypointOperationsCount = self.pendingWaypointOperations.count
         self.availableTrailUpdate = nil
         self.isApplyingTrailUpdate = false
+        self.syncFailureCount = self.pendingWaypointOperations.filter { ($0.retryCount ?? 0) > 0 }.count
+        self.lastSyncEventMessage = self.syncTelemetryEvents.last?.details
+        runLocalDataMigrations()
         self.syncFailureCount = self.pendingWaypointOperations.filter { ($0.retryCount ?? 0) > 0 }.count
         self.lastSyncEventMessage = self.syncTelemetryEvents.last?.details
 
@@ -947,6 +951,68 @@ final class AppStore: ObservableObject {
             return nil
         }
         return value
+    }
+
+    private func runLocalDataMigrations() {
+        let storedVersion = defaults.integer(forKey: AppPersistenceKeys.dataSchemaVersion)
+        guard storedVersion < Self.localDataSchemaVersion else { return }
+
+        if storedVersion < 1 {
+            migrateLocalDataToV1()
+        }
+
+        defaults.set(Self.localDataSchemaVersion, forKey: AppPersistenceKeys.dataSchemaVersion)
+    }
+
+    private func migrateLocalDataToV1() {
+        if var imported = importedTrailData {
+            imported.waypoints = imported.waypoints.map { waypoint in
+                var updated = waypoint
+                let season = updated.seasonTag?.trimmingCharacters(in: .whitespacesAndNewlines)
+                updated.seasonTag = (season?.isEmpty == true) ? nil : season
+                return updated
+            }
+            importedTrailData = imported
+            try? Self.persistImportedTrail(imported, fileManager: fileManager, defaults: defaults)
+        }
+
+        pendingWaypointOperations = pendingWaypointOperations.map { operation in
+            var updated = operation
+            if updated.mutationID?.isEmpty ?? true {
+                updated.mutationID = "mut_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+            }
+            if updated.retryCount == nil {
+                updated.retryCount = 0
+            }
+            if (updated.retryCount ?? 0) > 0 {
+                if updated.lastAttemptAt == nil {
+                    updated.lastAttemptAt = updated.queuedAt
+                }
+                if updated.nextAttemptAt == nil {
+                    updated.nextAttemptAt = Date()
+                }
+                if updated.lastError == nil {
+                    updated.lastError = "Recovered legacy retry metadata"
+                }
+            }
+            return updated
+        }
+        PersistenceCodec.persist(
+            pendingWaypointOperations,
+            key: AppPersistenceKeys.pendingWaypointOperations,
+            defaults: defaults
+        )
+
+        syncTelemetryEvents = syncTelemetryEvents
+            .filter { !$0.details.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        if syncTelemetryEvents.count > 120 {
+            syncTelemetryEvents.removeFirst(syncTelemetryEvents.count - 120)
+        }
+        PersistenceCodec.persist(
+            syncTelemetryEvents,
+            key: AppPersistenceKeys.syncTelemetryEvents,
+            defaults: defaults
+        )
     }
 
     private func enqueuePendingWaypointOperation(action: WaypointChangeAction, waypoint: TrailWaypoint) {
