@@ -549,7 +549,7 @@ final class AppStore: ObservableObject {
         imported.waypoints = remoteWaypoints
             .map { remote in
                 let hasValidCoordinate = isValidTrailCoordinate(latitude: remote.latitude, longitude: remote.longitude)
-                TrailWaypoint(
+                return TrailWaypoint(
                     id: remote.id,
                     name: remote.name,
                     distanceFromStart: remote.distanceFromStart,
@@ -938,8 +938,9 @@ final class AppStore: ObservableObject {
     }
 
     private func mapAppleAuthorizationError(_ error: Error) -> String {
-        if let appleError = error as? ASAuthorizationError {
-            switch appleError.code {
+        let nsError = error as NSError
+        if let code = ASAuthorizationError.Code(rawValue: nsError.code) {
+            switch code {
             case .canceled:
                 return "Apple Sign In was canceled."
             case .failed:
@@ -948,14 +949,12 @@ final class AppStore: ObservableObject {
                 return "Apple Sign In returned an invalid response."
             case .notHandled:
                 return "Apple Sign In request was not handled."
-            case .unknown:
-                return "Apple Sign In encountered an unknown error."
-            @unknown default:
+            default:
                 return "Apple Sign In failed."
             }
         }
 
-        let message = (error as NSError).localizedDescription
+        let message = nsError.localizedDescription
         return message.isEmpty ? "Apple Sign In failed." : message
     }
 
