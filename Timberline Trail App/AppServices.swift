@@ -108,6 +108,10 @@ struct PendingWaypointOperation: Codable, Hashable, Identifiable {
     var queuedAt: Date
     var actorEmail: String?
     var payload: TrailSyncWaypoint?
+    var retryCount: Int?
+    var nextAttemptAt: Date?
+    var lastAttemptAt: Date?
+    var lastError: String?
 }
 
 struct TrailRemoteUpdateInfo: Codable, Hashable {
