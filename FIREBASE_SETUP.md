@@ -50,3 +50,27 @@ xcodebuild -project 'Timberline Trail App.xcodeproj' -scheme 'Timberline Trail A
   - `trails/{trailId}`
   - `trails/{trailId}/versions/{versionId}`
   - `trails/{trailId}/waypoints/{waypointId}`
+
+## Firestore Rules (Production Hardening Step 1)
+
+This repo now includes:
+
+- `firestore.rules`
+- `firestore.indexes.json`
+- `firebase.json` (emulator + rules/indexes wiring)
+- `firebase/tests/firestore.rules.test.cjs` (rules tests)
+
+Run rules tests locally:
+
+```bash
+cd '/Users/michaeldankanich/Documents/git/app-timberline-trail/Timberline Trail App'
+npm install
+npm run test:rules
+```
+
+Deploy rules and indexes:
+
+```bash
+cd '/Users/michaeldankanich/Documents/git/app-timberline-trail/Timberline Trail App'
+npx firebase deploy --only firestore:rules,firestore:indexes
+```
