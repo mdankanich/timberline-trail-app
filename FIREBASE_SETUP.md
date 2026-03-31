@@ -74,3 +74,29 @@ Deploy rules and indexes:
 cd '/Users/michaeldankanich/Documents/git/app-timberline-trail/Timberline Trail App'
 npx firebase deploy --only firestore:rules,firestore:indexes
 ```
+
+## Cloud Functions Waypoint Validator (Production Hardening Step 2)
+
+This repo now includes:
+
+- `functions/index.js`
+- Callable function: `submitWaypointMutation`
+
+Purpose:
+
+- Server-side validation for waypoint add/edit/delete mutations.
+- Admin bypass for global edits (`mdankanich@slovo.org`).
+- Non-admin on-trail enforcement using server-side route point distance check.
+- Transactional write to:
+  - `trails/{trailId}/waypoints/{waypointId}`
+  - `trails/{trailId}/changes/{changeId}`
+
+Install and deploy functions:
+
+```bash
+cd '/Users/michaeldankanich/Documents/git/app-timberline-trail/Timberline Trail App/functions'
+npm install
+
+cd '/Users/michaeldankanich/Documents/git/app-timberline-trail/Timberline Trail App'
+npx firebase deploy --only functions:submitWaypointMutation
+```

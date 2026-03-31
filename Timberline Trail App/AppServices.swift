@@ -88,10 +88,16 @@ struct TrailSyncTrail: Codable, Hashable, Identifiable {
     var currentVersionId: String
     var sourceFileName: String
     var sourceGPXHash: String
+    var routePoints: [TrailSyncRoutePoint]?
     var lastSyncedAt: Date
     var updatedAt: Date
     var updatedByUID: String
     var updatedByEmail: String?
+}
+
+struct TrailSyncRoutePoint: Codable, Hashable {
+    var latitude: Double
+    var longitude: Double
 }
 
 struct PendingWaypointOperation: Codable, Hashable, Identifiable {
@@ -657,6 +663,7 @@ final class FirebaseTrailSyncService: TrailSyncService {
             currentVersionId: versionId,
             sourceFileName: imported.source.fileName,
             sourceGPXHash: gpxHash,
+            routePoints: sampledRoutePoints(from: imported.coordinates),
             lastSyncedAt: now,
             updatedAt: now,
             updatedByUID: uid,
@@ -714,6 +721,29 @@ final class FirebaseTrailSyncService: TrailSyncService {
         } catch {
             return nil
         }
+    }
+
+    private func sampledRoutePoints(from coordinates: [TrailCoordinate], maxSamples: Int = 800) -> [TrailSyncRoutePoint] {
+        guard !coordinates.isEmpty else { return [] }
+        if coordinates.count <= maxSamples {
+            return coordinates.map { TrailSyncRoutePoint(latitude: $0.latitude, longitude: $0.longitude) }
+        }
+        let strideValue = max(1, coordinates.count / maxSamples)
+        var sampled: [TrailSyncRoutePoint] = []
+        sampled.reserveCapacity(maxSamples + 1)
+        var index = 0
+        while index < coordinates.count {
+            let point = coordinates[index]
+            sampled.append(TrailSyncRoutePoint(latitude: point.latitude, longitude: point.longitude))
+            index += strideValue
+        }
+        if let last = coordinates.last {
+            let lastPoint = TrailSyncRoutePoint(latitude: last.latitude, longitude: last.longitude)
+            if sampled.last != lastPoint {
+                sampled.append(lastPoint)
+            }
+        }
+        return sampled
     }
 
     func applyPendingWaypointOperations(_ operations: [PendingWaypointOperation], preferredTrailId: String?) async -> Set<String> {
