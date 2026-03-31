@@ -95,6 +95,46 @@ func shouldShowTrailUpdate(versionId: String, dismissedVersion: String?) -> Bool
     dismissedVersion != versionId
 }
 
+func isValidTrailCoordinate(latitude: Double, longitude: Double) -> Bool {
+    latitude.isFinite &&
+    longitude.isFinite &&
+    (-90.0...90.0).contains(latitude) &&
+    (-180.0...180.0).contains(longitude)
+}
+
+func sanitizeImportedTrailData(_ imported: ImportedTrailData) -> ImportedTrailData {
+    var sanitized = imported
+    sanitized.coordinates = imported.coordinates.filter {
+        isValidTrailCoordinate(latitude: $0.latitude, longitude: $0.longitude)
+    }
+    sanitized.waypoints = imported.waypoints.map { waypoint in
+        var updated = waypoint
+        if let latitude = waypoint.latitude, let longitude = waypoint.longitude,
+           isValidTrailCoordinate(latitude: latitude, longitude: longitude) {
+            updated.latitude = latitude
+            updated.longitude = longitude
+        } else {
+            updated.latitude = nil
+            updated.longitude = nil
+        }
+        if !updated.distanceFromStart.isFinite {
+            updated.distanceFromStart = 0
+        }
+        updated.name = updated.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if updated.name.isEmpty {
+            updated.name = "Waypoint"
+        }
+        return updated
+    }
+    sanitized.waterSources = imported.waterSources.filter {
+        isValidTrailCoordinate(latitude: $0.latitude, longitude: $0.longitude)
+    }
+    sanitized.campsites = imported.campsites.filter {
+        isValidTrailCoordinate(latitude: $0.latitude, longitude: $0.longitude)
+    }
+    return sanitized
+}
+
 @MainActor
 final class AppStore: ObservableObject {
     private static let adminEmailAllowlist: Set<String> = [
@@ -480,7 +520,9 @@ final class AppStore: ObservableObject {
             }
         }
         let xml = try String(contentsOf: url, encoding: .utf8)
-        var imported = try importedTrailDataFromGPX(xml: xml, fileName: url.lastPathComponent)
+        var imported = sanitizeImportedTrailData(
+            try importedTrailDataFromGPX(xml: xml, fileName: url.lastPathComponent)
+        )
         let gpxHash = sha256(xml)
         imported.source.gpxHash = gpxHash
         importedTrailData = imported
@@ -506,6 +548,7 @@ final class AppStore: ObservableObject {
 
         imported.waypoints = remoteWaypoints
             .map { remote in
+                let hasValidCoordinate = isValidTrailCoordinate(latitude: remote.latitude, longitude: remote.longitude)
                 TrailWaypoint(
                     id: remote.id,
                     name: remote.name,
@@ -514,8 +557,8 @@ final class AppStore: ObservableObject {
                     seasonTag: remote.seasonTag,
                     dangerLevel: remote.dangerLevel,
                     summary: remote.summary,
-                    latitude: remote.latitude,
-                    longitude: remote.longitude,
+                    latitude: hasValidCoordinate ? remote.latitude : nil,
+                    longitude: hasValidCoordinate ? remote.longitude : nil,
                     lastEditedBy: remote.updatedByEmail ?? remote.updatedByUID,
                     lastEditedAt: remote.updatedAt
                 )
@@ -652,14 +695,15 @@ final class AppStore: ObservableObject {
         if let url = importedTrailFileURL(fileManager: .default),
            let data = try? Data(contentsOf: url),
            let decoded = try? decoder.decode(ImportedTrailData.self, from: data) {
-            return decoded
+            return sanitizeImportedTrailData(decoded)
         }
 
         // Legacy fallback for older builds that stored trail JSON in UserDefaults.
         if let legacy = PersistenceCodec.load(ImportedTrailData.self, key: AppPersistenceKeys.importedTrail, defaults: defaults) {
-            try? persistImportedTrail(legacy, fileManager: .default, defaults: defaults)
+            let sanitized = sanitizeImportedTrailData(legacy)
+            try? persistImportedTrail(sanitized, fileManager: .default, defaults: defaults)
             defaults.removeObject(forKey: AppPersistenceKeys.importedTrail)
-            return legacy
+            return sanitized
         }
         return nil
     }
@@ -784,8 +828,9 @@ final class AppStore: ObservableObject {
             trips = remoteTrips.trips
             activeTripID = remoteTrips.activeTripID ?? remoteTrips.trips.first?.id
             if let remoteTrail = remoteTrips.importedTrailData {
-                importedTrailData = remoteTrail
-                try? Self.persistImportedTrail(remoteTrail, fileManager: fileManager, defaults: defaults)
+                let sanitized = sanitizeImportedTrailData(remoteTrail)
+                importedTrailData = sanitized
+                try? Self.persistImportedTrail(sanitized, fileManager: fileManager, defaults: defaults)
             }
             tripService.saveLocalTrips(TripsSnapshot(trips: trips, activeTripID: activeTripID, importedTrailData: importedTrailData))
         }
@@ -980,7 +1025,9 @@ final class AppStore: ObservableObject {
             var randomBytes: [UInt8] = Array(repeating: 0, count: 16)
             let status = SecRandomCopyBytes(kSecRandomDefault, randomBytes.count, &randomBytes)
             if status != errSecSuccess {
-                fatalError("Unable to generate nonce. SecRandomCopyBytes failed with OSStatus \(status)")
+                let fallback = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+                    + String(Int(Date().timeIntervalSince1970))
+                return String(fallback.prefix(length))
             }
 
             randomBytes.forEach { random in
