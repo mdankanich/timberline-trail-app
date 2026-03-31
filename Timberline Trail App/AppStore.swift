@@ -955,6 +955,7 @@ final class AppStore: ObservableObject {
         )
         let operation = PendingWaypointOperation(
             id: "op_" + String(UUID().uuidString.prefix(12)),
+            mutationID: "mut_" + UUID().uuidString.replacingOccurrences(of: "-", with: ""),
             trailId: importedTrailData?.source.cloudTrailID,
             waypointId: waypoint.id,
             action: action,

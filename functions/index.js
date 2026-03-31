@@ -81,6 +81,15 @@ function nearestDistanceMeters(routePoints, latitude, longitude) {
   return best;
 }
 
+function stableHash(input) {
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
 exports.submitWaypointMutation = onCall(async (request) => {
   const auth = request.auth;
   if (!auth) {
@@ -99,6 +108,11 @@ exports.submitWaypointMutation = onCall(async (request) => {
 
   const trailId = asString(data.trailId, "trailId");
   const waypointId = asString(data.waypointId, "waypointId");
+  const mutationId = asOptionalString(data.mutationId) || `legacy-${waypointId}-${action}`;
+  const clientTimestamp = data.clientTimestamp ? new Date(data.clientTimestamp) : null;
+  const clientTimestampISO = clientTimestamp && !Number.isNaN(clientTimestamp.valueOf())
+    ? clientTimestamp.toISOString()
+    : "";
 
   const trailRef = db.collection("trails").doc(trailId);
   const trailSnap = await trailRef.get();
@@ -150,19 +164,35 @@ exports.submitWaypointMutation = onCall(async (request) => {
     }
   }
 
-  const changeId = "chg_" + db.collection("_").doc().id.slice(0, 14);
+  const mutationFingerprint = stableHash(JSON.stringify({
+    mutationId,
+    trailId,
+    waypointId,
+    action,
+    actorUID: uid,
+    actorEmail: email,
+    payload: mutation
+  }));
+  const changeId = `chg_${mutationId}`;
   const changeRef = trailRef.collection("changes").doc(changeId);
 
   await db.runTransaction(async (tx) => {
+    const existingChange = await tx.get(changeRef);
+    if (existingChange.exists) {
+      return;
+    }
+
     tx.set(waypointRef, mutation, { merge: true });
     tx.set(changeRef, {
       trailId,
       waypointId,
       action,
+      mutationId,
+      mutationFingerprint,
       actorUID: uid,
       actorEmail: email,
       changedAt: admin.firestore.FieldValue.serverTimestamp(),
-      clientTimestamp: data.clientTimestamp ? new Date(data.clientTimestamp) : null,
+      clientTimestamp: clientTimestampISO ? new Date(clientTimestampISO) : null,
       previousValue: previousValue,
       newValue: mutation
     }, { merge: false });
@@ -179,6 +209,7 @@ exports.submitWaypointMutation = onCall(async (request) => {
     trailId,
     waypointId,
     action,
-    changeId
+    changeId,
+    mutationId
   };
 });

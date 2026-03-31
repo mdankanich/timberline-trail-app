@@ -77,6 +77,8 @@ Suggested fields:
 - `trailId` (string)
 - `waypointId` (string)
 - `action` (string): `add | edit | softDelete`
+- `mutationId` (string) deterministic client mutation key for idempotent writes
+- `mutationFingerprint` (string) deterministic checksum of mutation payload
 - `seasonTag` (string|null)
 - `actorUID` (string)
 - `actorEmail` (string|null)
@@ -158,3 +160,4 @@ service cloud.firestore {
 - Enforces admin-only soft delete.
 - Enforces non-admin on-trail proximity against `trails/{trailId}.routePoints`.
 - Writes waypoint + change entry transactionally.
+- Uses `mutationId` to make retries idempotent (safe duplicate submissions).
