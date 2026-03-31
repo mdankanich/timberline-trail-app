@@ -1988,7 +1988,7 @@ struct AuthView: View {
 
     private var authContent: some View {
         VStack(spacing: 16) {
-            Spacer(minLength: 24)
+            Color.clear.frame(height: 24)
             authTitle
             appleSignInButton
             socialOptionButton(title: "Continue with Google", iconText: "G", iconColor: .orange) {
@@ -2002,7 +2002,7 @@ struct AuthView: View {
             emailAuthSection
             statusMessagesSection
             loadingRow
-            Spacer(minLength: 12)
+            Color.clear.frame(height: 12)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 16)
@@ -2021,7 +2021,15 @@ struct AuthView: View {
     }
 
     private var appleSignInButton: some View {
-        SignInWithAppleButton(.signIn, onRequest: store.handleAppleRequest, onCompletion: handleAppleSignInCompletion)
+        SignInWithAppleButton(
+            .signIn,
+            onRequest: { request in
+                store.handleAppleRequest(request)
+            },
+            onCompletion: { result in
+                handleAppleSignInCompletion(result)
+            }
+        )
             .signInWithAppleButtonStyle(.white)
             .colorMultiply(Color(UIColor.systemGray6))
             .frame(height: 60)
