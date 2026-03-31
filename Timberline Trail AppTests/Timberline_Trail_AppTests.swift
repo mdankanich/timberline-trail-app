@@ -186,4 +186,87 @@ class Timberline_Trail_AppTests: XCTestCase {
             XCTFail("Unexpected error: \(error)")
         }
     }
+
+    func testNormalizeSeasonTagForMigration() throws {
+        XCTAssertNil(normalizeSeasonTagForMigration(nil))
+        XCTAssertNil(normalizeSeasonTagForMigration("   "))
+        XCTAssertEqual(normalizeSeasonTagForMigration("  summer  "), "summer")
+    }
+
+    func testMigratePendingWaypointOperationV1BackfillsLegacyFields() throws {
+        let queuedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let now = Date(timeIntervalSince1970: 1_700_000_500)
+        let original = PendingWaypointOperation(
+            id: "op_1",
+            mutationID: nil,
+            trailId: "trail_1",
+            waypointId: "wp_1",
+            action: .edit,
+            queuedAt: queuedAt,
+            actorEmail: "hiker@example.com",
+            payload: nil,
+            retryCount: 2,
+            nextAttemptAt: nil,
+            lastAttemptAt: nil,
+            lastError: nil
+        )
+
+        let migrated = migratePendingWaypointOperationV1(original, now: now, mutationIDGenerator: { "mut_fixed" })
+        XCTAssertEqual(migrated.mutationID, "mut_fixed")
+        XCTAssertEqual(migrated.retryCount, 2)
+        XCTAssertEqual(migrated.lastAttemptAt, queuedAt)
+        XCTAssertEqual(migrated.nextAttemptAt, now)
+        XCTAssertEqual(migrated.lastError, "Recovered legacy retry metadata")
+    }
+
+    func testSanitizeSyncTelemetryEventsV1FiltersAndCaps() throws {
+        let baseDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let validEvents = (0..<125).map { index in
+            SyncTelemetryEvent(
+                id: "e\(index)",
+                type: .enqueue,
+                createdAt: baseDate.addingTimeInterval(Double(index)),
+                details: "event-\(index)"
+            )
+        }
+        let dirtyEvent = SyncTelemetryEvent(id: "blank", type: .flushSkipped, createdAt: baseDate, details: "   ")
+        let result = sanitizeSyncTelemetryEventsV1(validEvents + [dirtyEvent], maxCount: 120)
+
+        XCTAssertEqual(result.count, 120)
+        XCTAssertEqual(result.first?.id, "e5")
+        XCTAssertEqual(result.last?.id, "e124")
+        XCTAssertFalse(result.contains(where: { $0.id == "blank" }))
+    }
+
+    func testDuePendingWaypointOperationsHonorsRetryTimeAndLimit() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let dueA = PendingWaypointOperation(
+            id: "a", mutationID: "m1", trailId: nil, waypointId: "w1", action: .add,
+            queuedAt: now, actorEmail: nil, payload: nil, retryCount: 0, nextAttemptAt: nil, lastAttemptAt: nil, lastError: nil
+        )
+        let dueB = PendingWaypointOperation(
+            id: "b", mutationID: "m2", trailId: nil, waypointId: "w2", action: .edit,
+            queuedAt: now, actorEmail: nil, payload: nil, retryCount: 1, nextAttemptAt: now, lastAttemptAt: nil, lastError: nil
+        )
+        let notDue = PendingWaypointOperation(
+            id: "c", mutationID: "m3", trailId: nil, waypointId: "w3", action: .edit,
+            queuedAt: now, actorEmail: nil, payload: nil, retryCount: 1, nextAttemptAt: now.addingTimeInterval(60), lastAttemptAt: nil, lastError: nil
+        )
+
+        let due = duePendingWaypointOperations([dueA, dueB, notDue], now: now, limit: 1)
+        XCTAssertEqual(due.map(\.id), ["a"])
+    }
+
+    func testRetryBackoffIntervalBoundsAndCap() throws {
+        XCTAssertEqual(retryBackoffInterval(attempt: 1, jitter: 0), 5, accuracy: 0.001)
+        XCTAssertEqual(retryBackoffInterval(attempt: 1, jitter: 9), 8, accuracy: 0.001)
+        XCTAssertEqual(retryBackoffInterval(attempt: 8, jitter: 3), 643, accuracy: 0.001)
+        XCTAssertEqual(retryBackoffInterval(attempt: 99, jitter: 3), 643, accuracy: 0.001)
+    }
+
+    func testShouldShowTrailUpdateRespectsDismissedVersion() throws {
+        XCTAssertTrue(shouldShowTrailUpdate(versionId: "v2", dismissedVersion: nil))
+        XCTAssertTrue(shouldShowTrailUpdate(versionId: "v2", dismissedVersion: "v1"))
+        XCTAssertFalse(shouldShowTrailUpdate(versionId: "v2", dismissedVersion: "v2"))
+    }
 }

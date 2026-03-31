@@ -7,6 +7,7 @@
 
 import Foundation
 import AuthenticationServices
+import CryptoKit
 
 #if canImport(FirebaseAuth)
 import FirebaseAuth
@@ -53,6 +54,8 @@ struct TrailSyncWaypointChange: Codable, Hashable, Identifiable {
     var trailId: String
     var waypointId: String
     var action: WaypointChangeAction
+    var mutationId: String?
+    var mutationFingerprint: String?
     var seasonTag: String?
     var actorUID: String
     var actorEmail: String?
@@ -102,12 +105,17 @@ struct TrailSyncRoutePoint: Codable, Hashable {
 
 struct PendingWaypointOperation: Codable, Hashable, Identifiable {
     var id: String
+    var mutationID: String?
     var trailId: String?
     var waypointId: String
     var action: WaypointChangeAction
     var queuedAt: Date
     var actorEmail: String?
     var payload: TrailSyncWaypoint?
+    var retryCount: Int?
+    var nextAttemptAt: Date?
+    var lastAttemptAt: Date?
+    var lastError: String?
 }
 
 struct TrailRemoteUpdateInfo: Codable, Hashable {
@@ -115,6 +123,24 @@ struct TrailRemoteUpdateInfo: Codable, Hashable {
     var versionId: String
     var updatedAt: Date
     var changesSummary: TrailSyncChangesSummary
+}
+
+enum SyncTelemetryEventType: String, Codable, Hashable {
+    case enqueue
+    case flushStarted
+    case flushSucceeded
+    case flushRetried
+    case flushSkipped
+    case cloudImportLinked
+    case updateAvailable
+    case updateApplied
+}
+
+struct SyncTelemetryEvent: Codable, Hashable, Identifiable {
+    var id: String
+    var type: SyncTelemetryEventType
+    var createdAt: Date
+    var details: String
 }
 
 enum AppPersistenceKeys {
@@ -127,6 +153,8 @@ enum AppPersistenceKeys {
     static let importedTrail = "phase1_imported_trail"
     static let pendingWaypointOperations = "phase1_pending_waypoint_operations"
     static let dismissedTrailUpdateVersion = "phase1_dismissed_trail_update_version"
+    static let syncTelemetryEvents = "phase1_sync_telemetry_events"
+    static let dataSchemaVersion = "phase1_data_schema_version"
 }
 
 enum AuthServiceError: LocalizedError, Equatable {
@@ -225,6 +253,11 @@ enum PersistenceCodec {
         guard let data = defaults.data(forKey: key) else { return nil }
         return try? JSONDecoder().decode(T.self, from: data)
     }
+}
+
+private func stableDigestHex(_ value: String) -> String {
+    let digest = SHA256.hash(data: Data(value.utf8))
+    return digest.compactMap { String(format: "%02x", $0) }.joined()
 }
 
 final class LocalAuthService: AuthService {
@@ -777,11 +810,15 @@ final class FirebaseTrailSyncService: TrailSyncService {
                 payload.deletedBy = email
             }
             guard let waypointData = FirestoreCodec.encode(payload) else { continue }
+            let mutationId = operation.mutationID ?? "legacy-\(operation.id)"
+            let fingerprintSource = "\(mutationId)|\(trailId)|\(operation.waypointId)|\(operation.action.rawValue)|\(payload.name)|\(payload.distanceFromStart)|\(payload.latitude)|\(payload.longitude)|\(payload.updatedByUID)"
             let change = TrailSyncWaypointChange(
-                id: "chg_" + String(UUID().uuidString.prefix(14)),
+                id: "chg_" + mutationId,
                 trailId: trailId,
                 waypointId: operation.waypointId,
                 action: operation.action,
+                mutationId: mutationId,
+                mutationFingerprint: stableDigestHex(fingerprintSource),
                 seasonTag: payload.seasonTag,
                 actorUID: uid,
                 actorEmail: email,

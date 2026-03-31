@@ -28,11 +28,79 @@ func deriveAppFlowState(session: AuthSession?, profile: UserProfile?) -> AppFlow
     return .ready
 }
 
+func normalizeSeasonTagForMigration(_ seasonTag: String?) -> String? {
+    guard let trimmed = seasonTag?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+        return nil
+    }
+    return trimmed
+}
+
+func defaultMutationID() -> String {
+    "mut_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+}
+
+func migratePendingWaypointOperationV1(
+    _ operation: PendingWaypointOperation,
+    now: Date,
+    mutationIDGenerator: () -> String = defaultMutationID
+) -> PendingWaypointOperation {
+    var updated = operation
+    if updated.mutationID?.isEmpty ?? true {
+        updated.mutationID = mutationIDGenerator()
+    }
+    if updated.retryCount == nil {
+        updated.retryCount = 0
+    }
+    if (updated.retryCount ?? 0) > 0 {
+        if updated.lastAttemptAt == nil {
+            updated.lastAttemptAt = updated.queuedAt
+        }
+        if updated.nextAttemptAt == nil {
+            updated.nextAttemptAt = now
+        }
+        if updated.lastError == nil {
+            updated.lastError = "Recovered legacy retry metadata"
+        }
+    }
+    return updated
+}
+
+func sanitizeSyncTelemetryEventsV1(_ events: [SyncTelemetryEvent], maxCount: Int = 120) -> [SyncTelemetryEvent] {
+    var result = events.filter { !$0.details.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    if result.count > maxCount {
+        result.removeFirst(result.count - maxCount)
+    }
+    return result
+}
+
+func duePendingWaypointOperations(
+    _ operations: [PendingWaypointOperation],
+    now: Date,
+    limit: Int = 50
+) -> [PendingWaypointOperation] {
+    Array(operations.filter { operation in
+        guard let nextAttemptAt = operation.nextAttemptAt else { return true }
+        return nextAttemptAt <= now
+    }.prefix(limit))
+}
+
+func retryBackoffInterval(attempt: Int, jitter: Int) -> TimeInterval {
+    let cappedAttempt = min(max(1, attempt), 8)
+    let base = pow(2.0, Double(cappedAttempt - 1)) * 5.0
+    let boundedJitter = Double(min(max(0, jitter), 3))
+    return min(base + boundedJitter, 15 * 60)
+}
+
+func shouldShowTrailUpdate(versionId: String, dismissedVersion: String?) -> Bool {
+    dismissedVersion != versionId
+}
+
 @MainActor
 final class AppStore: ObservableObject {
     private static let adminEmailAllowlist: Set<String> = [
         "mdankanich@slovo.org"
     ]
+    private static let localDataSchemaVersion = 1
 
     @Published private(set) var session: AuthSession?
     @Published private(set) var profile: UserProfile?
@@ -48,6 +116,8 @@ final class AppStore: ObservableObject {
     @Published private(set) var pendingWaypointOperationsCount: Int
     @Published private(set) var availableTrailUpdate: TrailRemoteUpdateInfo?
     @Published private(set) var isApplyingTrailUpdate: Bool
+    @Published private(set) var syncFailureCount: Int
+    @Published private(set) var lastSyncEventMessage: String?
 
     private var backgroundedAt: Date?
     private var currentNonce: String?
@@ -61,6 +131,8 @@ final class AppStore: ObservableObject {
     private let defaults = UserDefaults.standard
     private let fileManager = FileManager.default
     private var pendingWaypointOperations: [PendingWaypointOperation]
+    private var syncTelemetryEvents: [SyncTelemetryEvent]
+    private var isFlushingPendingWaypointOperations = false
 
     init(environment: AppEnvironment = .live()) {
         self.authService = environment.authService
@@ -81,6 +153,11 @@ final class AppStore: ObservableObject {
             key: AppPersistenceKeys.pendingWaypointOperations,
             defaults: defaults
         ) ?? []
+        self.syncTelemetryEvents = PersistenceCodec.load(
+            [SyncTelemetryEvent].self,
+            key: AppPersistenceKeys.syncTelemetryEvents,
+            defaults: defaults
+        ) ?? []
 
         let tripSnapshot = environment.tripService.loadLocalTrips()
         self.trips = tripSnapshot.trips
@@ -94,6 +171,11 @@ final class AppStore: ObservableObject {
         self.pendingWaypointOperationsCount = self.pendingWaypointOperations.count
         self.availableTrailUpdate = nil
         self.isApplyingTrailUpdate = false
+        self.syncFailureCount = self.pendingWaypointOperations.filter { ($0.retryCount ?? 0) > 0 }.count
+        self.lastSyncEventMessage = self.syncTelemetryEvents.last?.details
+        runLocalDataMigrations()
+        self.syncFailureCount = self.pendingWaypointOperations.filter { ($0.retryCount ?? 0) > 0 }.count
+        self.lastSyncEventMessage = self.syncTelemetryEvents.last?.details
 
         if session != nil {
             Task { await refreshFromCloud() }
@@ -447,6 +529,7 @@ final class AppStore: ObservableObject {
         persistTrips()
         defaults.removeObject(forKey: AppPersistenceKeys.dismissedTrailUpdateVersion)
         availableTrailUpdate = nil
+        recordSyncEvent(.updateApplied, details: "Applied cloud update \(update.versionId)")
         await flushPendingWaypointOperations()
     }
 
@@ -732,6 +815,9 @@ final class AppStore: ObservableObject {
         importedTrailData = nil
         pendingWaypointOperations = []
         pendingWaypointOperationsCount = 0
+        syncTelemetryEvents = []
+        syncFailureCount = 0
+        lastSyncEventMessage = nil
         availableTrailUpdate = nil
         isApplyingTrailUpdate = false
         userService.clearLocalProfile()
@@ -739,6 +825,7 @@ final class AppStore: ObservableObject {
         defaults.removeObject(forKey: AppPersistenceKeys.importedTrail)
         defaults.removeObject(forKey: AppPersistenceKeys.pendingWaypointOperations)
         defaults.removeObject(forKey: AppPersistenceKeys.dismissedTrailUpdateVersion)
+        defaults.removeObject(forKey: AppPersistenceKeys.syncTelemetryEvents)
         Self.removePersistedImportedTrail(fileManager: fileManager)
         refreshFlowState()
     }
@@ -864,6 +951,7 @@ final class AppStore: ObservableObject {
                 if let updated = importedTrailData {
                     try? Self.persistImportedTrail(updated, fileManager: fileManager, defaults: defaults)
                 }
+                recordSyncEvent(.cloudImportLinked, details: "Linked local trail to \(existing.id)")
             }
             await flushPendingWaypointOperations()
             await checkForTrailUpdate()
@@ -876,6 +964,7 @@ final class AppStore: ObservableObject {
             if let updated = importedTrailData {
                 try? Self.persistImportedTrail(updated, fileManager: fileManager, defaults: defaults)
             }
+            recordSyncEvent(.cloudImportLinked, details: "Created cloud trail \(created.id)")
             await flushPendingWaypointOperations()
             await checkForTrailUpdate()
         }
@@ -931,6 +1020,46 @@ final class AppStore: ObservableObject {
         return value
     }
 
+    private func runLocalDataMigrations() {
+        let storedVersion = defaults.integer(forKey: AppPersistenceKeys.dataSchemaVersion)
+        guard storedVersion < Self.localDataSchemaVersion else { return }
+
+        if storedVersion < 1 {
+            migrateLocalDataToV1()
+        }
+
+        defaults.set(Self.localDataSchemaVersion, forKey: AppPersistenceKeys.dataSchemaVersion)
+    }
+
+    private func migrateLocalDataToV1() {
+        if var imported = importedTrailData {
+            imported.waypoints = imported.waypoints.map { waypoint in
+                var updated = waypoint
+                updated.seasonTag = normalizeSeasonTagForMigration(updated.seasonTag)
+                return updated
+            }
+            importedTrailData = imported
+            try? Self.persistImportedTrail(imported, fileManager: fileManager, defaults: defaults)
+        }
+
+        let migrationNow = Date()
+        pendingWaypointOperations = pendingWaypointOperations.map { operation in
+            migratePendingWaypointOperationV1(operation, now: migrationNow)
+        }
+        PersistenceCodec.persist(
+            pendingWaypointOperations,
+            key: AppPersistenceKeys.pendingWaypointOperations,
+            defaults: defaults
+        )
+
+        syncTelemetryEvents = sanitizeSyncTelemetryEventsV1(syncTelemetryEvents)
+        PersistenceCodec.persist(
+            syncTelemetryEvents,
+            key: AppPersistenceKeys.syncTelemetryEvents,
+            defaults: defaults
+        )
+    }
+
     private func enqueuePendingWaypointOperation(action: WaypointChangeAction, waypoint: TrailWaypoint) {
         let latitude = waypoint.latitude ?? 0
         let longitude = waypoint.longitude ?? 0
@@ -954,12 +1083,17 @@ final class AppStore: ObservableObject {
         )
         let operation = PendingWaypointOperation(
             id: "op_" + String(UUID().uuidString.prefix(12)),
+            mutationID: "mut_" + UUID().uuidString.replacingOccurrences(of: "-", with: ""),
             trailId: importedTrailData?.source.cloudTrailID,
             waypointId: waypoint.id,
             action: action,
             queuedAt: Date(),
             actorEmail: session?.email,
-            payload: payload
+            payload: payload,
+            retryCount: 0,
+            nextAttemptAt: nil,
+            lastAttemptAt: nil,
+            lastError: nil
         )
         pendingWaypointOperations.append(operation)
         PersistenceCodec.persist(
@@ -968,22 +1102,64 @@ final class AppStore: ObservableObject {
             defaults: defaults
         )
         pendingWaypointOperationsCount = pendingWaypointOperations.count
+        recordSyncEvent(.enqueue, details: "Queued \(action.rawValue) for waypoint \(waypoint.id)")
+        Task { await flushPendingWaypointOperations() }
     }
 
     private func flushPendingWaypointOperations() async {
+        guard !isFlushingPendingWaypointOperations else { return }
         guard !pendingWaypointOperations.isEmpty else { return }
+        isFlushingPendingWaypointOperations = true
+        defer { isFlushingPendingWaypointOperations = false }
+
+        let now = Date()
+        let dueOperations = duePendingWaypointOperations(pendingWaypointOperations, now: now, limit: 50)
+        guard !dueOperations.isEmpty else {
+            recordSyncEvent(.flushSkipped, details: "No due operations to sync")
+            return
+        }
+        recordSyncEvent(.flushStarted, details: "Attempting sync for \(dueOperations.count) ops")
+
         let applied = await trailSyncService.applyPendingWaypointOperations(
-            pendingWaypointOperations,
+            dueOperations,
             preferredTrailId: importedTrailData?.source.cloudTrailID
         )
-        guard !applied.isEmpty else { return }
+        let attemptedIds = Set(dueOperations.map(\.id))
+
         pendingWaypointOperations.removeAll { applied.contains($0.id) }
+        if !applied.isEmpty {
+            recordSyncEvent(.flushSucceeded, details: "Synced \(applied.count) ops")
+        }
+
+        if !attemptedIds.isEmpty {
+            pendingWaypointOperations = pendingWaypointOperations.map { operation in
+                guard attemptedIds.contains(operation.id) else { return operation }
+                var updated = operation
+                let previousRetryCount = updated.retryCount ?? 0
+                let nextRetryCount = previousRetryCount + 1
+                updated.retryCount = nextRetryCount
+                updated.lastAttemptAt = now
+                updated.lastError = "Sync retry scheduled"
+                updated.nextAttemptAt = now.addingTimeInterval(randomizedRetryBackoffInterval(attempt: nextRetryCount))
+                return updated
+            }
+            let retryCount = attemptedIds.subtracting(applied).count
+            if retryCount > 0 {
+                recordSyncEvent(.flushRetried, details: "Retry scheduled for \(retryCount) ops")
+            }
+        }
+
         PersistenceCodec.persist(
             pendingWaypointOperations,
             key: AppPersistenceKeys.pendingWaypointOperations,
             defaults: defaults
         )
         pendingWaypointOperationsCount = pendingWaypointOperations.count
+        syncFailureCount = pendingWaypointOperations.filter { ($0.retryCount ?? 0) > 0 }.count
+    }
+
+    private func randomizedRetryBackoffInterval(attempt: Int) -> TimeInterval {
+        retryBackoffInterval(attempt: attempt, jitter: Int.random(in: 0...3))
     }
 
     private func checkForTrailUpdate() async {
@@ -997,10 +1173,30 @@ final class AppStore: ObservableObject {
             return
         }
         let dismissedVersion = defaults.string(forKey: AppPersistenceKeys.dismissedTrailUpdateVersion)
-        if dismissedVersion == update.versionId {
+        if !shouldShowTrailUpdate(versionId: update.versionId, dismissedVersion: dismissedVersion) {
             availableTrailUpdate = nil
             return
         }
         availableTrailUpdate = update
+        recordSyncEvent(.updateAvailable, details: "Update available \(update.versionId)")
+    }
+
+    private func recordSyncEvent(_ type: SyncTelemetryEventType, details: String) {
+        let event = SyncTelemetryEvent(
+            id: "sync_" + String(UUID().uuidString.prefix(12)),
+            type: type,
+            createdAt: Date(),
+            details: details
+        )
+        syncTelemetryEvents.append(event)
+        if syncTelemetryEvents.count > 120 {
+            syncTelemetryEvents.removeFirst(syncTelemetryEvents.count - 120)
+        }
+        lastSyncEventMessage = "[\(type.rawValue)] \(details)"
+        PersistenceCodec.persist(
+            syncTelemetryEvents,
+            key: AppPersistenceKeys.syncTelemetryEvents,
+            defaults: defaults
+        )
     }
 }
