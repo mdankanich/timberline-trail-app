@@ -1,0 +1,93 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // Current admin bootstrap model used by app code.
+    function isAdmin() {
+      return isSignedIn()
+        && request.auth.token.email != null
+        && request.auth.token.email == "mdankanich@slovo.org";
+    }
+
+    function hasOnlyWaypointFields(data) {
+      return data.keys().hasOnly([
+        "trailId",
+        "name",
+        "type",
+        "dangerLevel",
+        "summary",
+        "distanceFromStart",
+        "latitude",
+        "longitude",
+        "seasonTag",
+        "isDeleted",
+        "deletedAt",
+        "deletedBy",
+        "updatedAt",
+        "updatedByUID",
+        "updatedByEmail"
+      ]);
+    }
+
+    function isValidWaypointData(data, trailId) {
+      return hasOnlyWaypointFields(data)
+        && data.trailId == trailId
+        && data.name is string
+        && data.type is string
+        && data.distanceFromStart is number
+        && data.latitude is number
+        && data.longitude is number
+        && data.isDeleted is bool
+        && data.updatedByUID is string;
+    }
+
+    match /users/{uid}/data/{docId} {
+      allow read, write: if isOwner(uid);
+    }
+
+    match /app_content/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /trails/{trailId} {
+      allow read: if isSignedIn();
+      // Trail metadata is admin-managed.
+      allow create, update, delete: if isAdmin();
+
+      match /versions/{versionId} {
+        allow read: if isSignedIn();
+        allow create, update, delete: if isAdmin();
+      }
+
+      match /waypoints/{waypointId} {
+        allow read: if isSignedIn();
+        allow create: if isSignedIn() && isValidWaypointData(request.resource.data, trailId);
+        allow update: if isSignedIn()
+          && isValidWaypointData(request.resource.data, trailId)
+          // Hard delete is blocked. Soft delete only; no undelete.
+          && (resource.data.isDeleted == false || request.resource.data.isDeleted == true);
+        allow delete: if false;
+      }
+
+      match /changes/{changeId} {
+        allow read: if isSignedIn();
+        allow create: if isSignedIn()
+          && request.resource.data.keys().hasAll([
+            "trailId", "waypointId", "action", "actorUID", "changedAt"
+          ])
+          && request.resource.data.trailId == trailId
+          && request.resource.data.action in ["add", "edit", "softDelete"];
+        // Append-only audit log.
+        allow update, delete: if false;
+      }
+    }
+  }
+}

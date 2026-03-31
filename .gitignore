@@ -1,5 +1,7 @@
 # Local Xcode build products
 DerivedData/
+node_modules/
+firestore-debug.log
 
 # Firebase config (environment-specific secret material)
 Timberline Trail App/GoogleService-Info.plist

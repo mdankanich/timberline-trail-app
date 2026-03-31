@@ -4,6 +4,7 @@
 - [Release Checklist](RELEASE_CHECKLIST.md)
 - [Mobile Design Standards](MOBILE_DESIGN_STANDARDS.md)
 - [Firestore Trail Sync Schema](FIRESTORE_TRAIL_SYNC_SCHEMA.md)
+- [Firebase Setup](FIREBASE_SETUP.md)
 
 ## Version Bump
 
