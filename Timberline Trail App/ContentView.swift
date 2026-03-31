@@ -1982,146 +1982,166 @@ struct AuthView: View {
     }
 
     var body: some View {
-        NavigationView {
-            VStack(spacing: 16) {
-                Spacer(minLength: 24)
-                Text("Sign up or log in\nto access your profile")
-                    .font(.system(size: 20, weight: .semibold, design: .rounded))
-                    .multilineTextAlignment(.center)
-                    .lineSpacing(3)
-                    .padding(.bottom, 12)
-
-                SignInWithAppleButton(
-                    .signIn,
-                    onRequest: { request in
-                        store.handleAppleRequest(request)
-                    },
-                    onCompletion: { result in
-                        Task {
-                            await store.handleAppleCompletion(result)
-                        }
-                    }
-                )
-                .signInWithAppleButtonStyle(.white)
-                .colorMultiply(Color(UIColor.systemGray6))
-                .frame(height: 60)
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .disabled(store.isAuthLoading)
-
-                socialOptionButton(title: "Continue with Google", iconText: "G", iconColor: .orange) {
-                    socialInfoMessage = "Google sign-in is coming soon."
-                }
-
-                socialOptionButton(title: "Continue with Facebook", iconText: "f", iconColor: .blue) {
-                    socialInfoMessage = "Facebook sign-in is coming soon."
-                }
-
-                HStack {
-                    Rectangle().fill(Color.secondary.opacity(0.25)).frame(height: 1)
-                    Text("or")
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
-                    Rectangle().fill(Color.secondary.opacity(0.25)).frame(height: 1)
-                }
-
-                Button("Continue with email") {
-                    showEmailAuth = true
-                    socialInfoMessage = nil
-                }
-                .frame(maxWidth: .infinity)
-                .frame(height: 60)
-                .background(Color(red: 0.03, green: 0.14, blue: 0.08))
-                .foregroundColor(.white)
-                .font(.title3.weight(.semibold))
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .disabled(store.isAuthLoading)
-
-                if showEmailAuth {
-                    VStack(spacing: 12) {
-                        Picker("Mode", selection: $mode) {
-                            ForEach(Mode.allCases) { option in
-                                Text(option.rawValue).tag(option)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-
-                        TextField("Email", text: $email)
-                            .textInputAutocapitalization(.never)
-                            .keyboardType(.emailAddress)
-                            .disableAutocorrection(true)
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-
-                        SecureField("Password (6+ chars)", text: $password)
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-
-                        Button(mode == .signIn ? "Sign In" : "Create Account") {
-                            Task {
-                                if mode == .signIn {
-                                    await store.signIn(email: email, password: password)
-                                } else {
-                                    await store.signUp(email: email, password: password)
-                                }
-                            }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .frame(maxWidth: .infinity)
-                        .disabled(store.isAuthLoading)
-
-                        if mode == .signIn {
-                            Button("Forgot password?") {
-                                Task {
-                                    await store.requestPasswordReset(email: email)
-                                }
-                            }
-                            .buttonStyle(.bordered)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .disabled(store.isAuthLoading)
-                        }
-                    }
-                    .padding(.top, 4)
-                }
-
-                if let error = store.authError {
-                    Text(error)
-                        .font(.footnote)
-                        .foregroundColor(.red)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                if let socialInfoMessage = socialInfoMessage {
-                    Text(socialInfoMessage)
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                if let info = store.authInfoMessage {
-                    Text(info)
-                        .font(.footnote)
-                        .foregroundColor(.green)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                if store.isAuthLoading {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                        Text("Working...")
-                            .font(.footnote)
-                            .foregroundColor(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                Spacer(minLength: 12)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 16)
-            .navigationBarHidden(true)
-            .onChange(of: mode) { _ in
-                store.clearAuthMessages()
-            }
-        }
+        NavigationView { authContent }
         .navigationViewStyle(.stack)
+    }
+
+    private var authContent: some View {
+        VStack(spacing: 16) {
+            Spacer(minLength: 24)
+            authTitle
+            appleSignInButton
+            socialOptionButton(title: "Continue with Google", iconText: "G", iconColor: .orange) {
+                socialInfoMessage = "Google sign-in is coming soon."
+            }
+            socialOptionButton(title: "Continue with Facebook", iconText: "f", iconColor: .blue) {
+                socialInfoMessage = "Facebook sign-in is coming soon."
+            }
+            dividerView
+            continueWithEmailButton
+            emailAuthSection
+            statusMessagesSection
+            loadingRow
+            Spacer(minLength: 12)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 16)
+        .navigationBarHidden(true)
+        .onChange(of: mode) { _ in
+            store.clearAuthMessages()
+        }
+    }
+
+    private var authTitle: some View {
+        Text("Sign up or log in\nto access your profile")
+            .font(.system(size: 20, weight: .semibold, design: .rounded))
+            .multilineTextAlignment(.center)
+            .lineSpacing(3)
+            .padding(.bottom, 12)
+    }
+
+    private var appleSignInButton: some View {
+        SignInWithAppleButton(.signIn, onRequest: store.handleAppleRequest, onCompletion: handleAppleSignInCompletion)
+            .signInWithAppleButtonStyle(.white)
+            .colorMultiply(Color(UIColor.systemGray6))
+            .frame(height: 60)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .disabled(store.isAuthLoading)
+    }
+
+    private var dividerView: some View {
+        HStack {
+            Rectangle().fill(Color.secondary.opacity(0.25)).frame(height: 1)
+            Text("or")
+                .font(.footnote)
+                .foregroundColor(.secondary)
+            Rectangle().fill(Color.secondary.opacity(0.25)).frame(height: 1)
+        }
+    }
+
+    private var continueWithEmailButton: some View {
+        Button("Continue with email") {
+            showEmailAuth = true
+            socialInfoMessage = nil
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 60)
+        .background(Color(red: 0.03, green: 0.14, blue: 0.08))
+        .foregroundColor(.white)
+        .font(.title3.weight(.semibold))
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .disabled(store.isAuthLoading)
+    }
+
+    @ViewBuilder
+    private var emailAuthSection: some View {
+        if showEmailAuth {
+            VStack(spacing: 12) {
+                Picker("Mode", selection: $mode) {
+                    ForEach(Mode.allCases) { option in
+                        Text(option.rawValue).tag(option)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                TextField("Email", text: $email)
+                    .textInputAutocapitalization(.never)
+                    .keyboardType(.emailAddress)
+                    .disableAutocorrection(true)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+
+                SecureField("Password (6+ chars)", text: $password)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+
+                Button(mode == .signIn ? "Sign In" : "Create Account") {
+                    Task {
+                        if mode == .signIn {
+                            await store.signIn(email: email, password: password)
+                        } else {
+                            await store.signUp(email: email, password: password)
+                        }
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .frame(maxWidth: .infinity)
+                .disabled(store.isAuthLoading)
+
+                if mode == .signIn {
+                    Button("Forgot password?") {
+                        Task {
+                            await store.requestPasswordReset(email: email)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .disabled(store.isAuthLoading)
+                }
+            }
+            .padding(.top, 4)
+        }
+    }
+
+    @ViewBuilder
+    private var statusMessagesSection: some View {
+        if let error = store.authError {
+            Text(error)
+                .font(.footnote)
+                .foregroundColor(.red)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+
+        if let socialInfoMessage = socialInfoMessage {
+            Text(socialInfoMessage)
+                .font(.footnote)
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+
+        if let info = store.authInfoMessage {
+            Text(info)
+                .font(.footnote)
+                .foregroundColor(.green)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private var loadingRow: some View {
+        if store.isAuthLoading {
+            HStack(spacing: 8) {
+                ProgressView()
+                Text("Working...")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func handleAppleSignInCompletion(_ result: Result<ASAuthorization, Error>) {
+        Task {
+            await store.handleAppleCompletion(result)
+        }
     }
 
     private func socialOptionButton(title: String, iconText: String, iconColor: Color, action: @escaping () -> Void) -> some View {
@@ -2824,16 +2844,24 @@ private struct MapHomeView: View {
     private func sortedWaypointsWithSegmentDistance() -> [(waypoint: TrailWaypoint, segmentToNextMiles: Double?)] {
         let ascending = store.activeTrailWaypoints.sorted { $0.distanceFromStart < $1.distanceFromStart }
         let waypoints = waypointDirection == .clockwise ? ascending : Array(ascending.reversed())
-        return waypoints.enumerated().map { index, waypoint in
-            let nextDistanceFromStart = index + 1 < waypoints.count ? waypoints[index + 1].distanceFromStart : nil
-            let segment = nextDistanceFromStart.map { nextDistance in
+        var rows: [(waypoint: TrailWaypoint, segmentToNextMiles: Double?)] = []
+        rows.reserveCapacity(waypoints.count)
+        for index in waypoints.indices {
+            let waypoint = waypoints[index]
+            let segment: Double?
+            if index + 1 < waypoints.count {
+                let nextDistance = waypoints[index + 1].distanceFromStart
                 if waypointDirection == .clockwise {
-                    return max(0, nextDistance - waypoint.distanceFromStart)
+                    segment = max(0, nextDistance - waypoint.distanceFromStart)
+                } else {
+                    segment = max(0, waypoint.distanceFromStart - nextDistance)
                 }
-                return max(0, waypoint.distanceFromStart - nextDistance)
+            } else {
+                segment = nil
             }
-            return (waypoint: waypoint, segmentToNextMiles: segment)
+            rows.append((waypoint: waypoint, segmentToNextMiles: segment))
         }
+        return rows
     }
 
     private func distanceToTrailMeters(from coordinate: CLLocationCoordinate2D) -> Double {
