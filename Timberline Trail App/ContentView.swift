@@ -2767,7 +2767,7 @@ private struct MapHomeView: View {
                 waypointDirectionButton(title: "Counterclockwise", direction: .counterclockwise)
             }
 
-            ForEach(sortedWaypointsWithSegmentDistance(), id: \.waypoint.id) { item in
+            ForEach(Array(sortedWaypointsWithSegmentDistance().enumerated()), id: \.offset) { _, item in
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
                         Text(item.waypoint.name)
@@ -3355,7 +3355,7 @@ private struct TrailGuideView: View {
                 }
 
                 Section("Dangerous Crossings") {
-                    ForEach(store.activeTrailWaypoints.filter { dangerousCrossingWaypointIDs.contains($0.id) }) { waypoint in
+                    ForEach(Array(store.activeTrailWaypoints.filter { dangerousCrossingWaypointIDs.contains($0.id) }.enumerated()), id: \.offset) { _, waypoint in
                         VStack(alignment: .leading, spacing: 4) {
                             Text(waypoint.name)
                                 .font(.subheadline.bold())
@@ -4000,7 +4000,7 @@ private struct TripDetailView: View {
                     }
 
                     Section("Trail Highlights") {
-                        ForEach(store.activeTrailWaypoints.prefix(6)) { waypoint in
+                        ForEach(Array(store.activeTrailWaypoints.prefix(6).enumerated()), id: \.offset) { _, waypoint in
                             Text("• Mile \(String(format: "%.1f", waypoint.distanceFromStart)) - \(waypoint.name)")
                         }
                     }

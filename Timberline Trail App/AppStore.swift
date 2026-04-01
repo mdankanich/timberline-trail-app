@@ -1017,7 +1017,7 @@ final class AppStore: ObservableObject {
     }
 
     private func randomNonceString(length: Int = 32) -> String {
-        precondition(length > 0)
+        guard length > 0 else { return "" }
         let charset: [Character] = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvwxyz-._")
         var result = ""
         var remaining = length
