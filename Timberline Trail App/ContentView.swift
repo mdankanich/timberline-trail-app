@@ -2577,7 +2577,7 @@ private struct MapHomeView: View {
 
             if !proactiveAlerts.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
-                    ForEach(proactiveAlerts, id: \.self) { alert in
+                    ForEach(Array(proactiveAlerts.enumerated()), id: \.offset) { _, alert in
                         Label(alert, systemImage: "exclamationmark.triangle.fill")
                             .font(.footnote)
                             .foregroundColor(.orange)
@@ -2729,7 +2729,7 @@ private struct MapHomeView: View {
     private var recentTracksSection: some View {
         if !locationTracker.sessions.isEmpty {
             Section {
-                ForEach(locationTracker.sessions.prefix(3)) { session in
+                ForEach(Array(locationTracker.sessions.prefix(3).enumerated()), id: \.offset) { _, session in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(session.startedAt.formatted(date: .abbreviated, time: .shortened))
                             .font(.subheadline.bold())
@@ -3367,7 +3367,7 @@ private struct TrailGuideView: View {
                 }
 
                 Section("Water Sources") {
-                    ForEach(waterSources) { source in
+                    ForEach(Array(waterSources.enumerated()), id: \.offset) { _, source in
                         VStack(alignment: .leading, spacing: 4) {
                             Text(source.name)
                                 .font(.subheadline.bold())
@@ -3384,7 +3384,7 @@ private struct TrailGuideView: View {
                 }
 
                 Section("Campsites") {
-                    ForEach(campsites) { campsite in
+                    ForEach(Array(campsites.enumerated()), id: \.offset) { _, campsite in
                         VStack(alignment: .leading, spacing: 4) {
                             Text(campsite.name)
                                 .font(.subheadline.bold())
@@ -3540,7 +3540,7 @@ private struct SafetyHubView: View {
                 }
 
                 Section("Key Numbers") {
-                    ForEach(store.safetyKeyNumbers) { number in
+                    ForEach(Array(store.safetyKeyNumbers.enumerated()), id: \.offset) { _, number in
                         HStack {
                             Text(number.label)
                             Spacer()
@@ -3797,7 +3797,7 @@ private struct TripsView: View {
                     Text("No trips yet. Create your first trip.")
                         .foregroundColor(.secondary)
                 } else {
-                    ForEach(store.trips) { trip in
+                    ForEach(Array(store.trips.enumerated()), id: \.offset) { _, trip in
                         VStack(alignment: .leading, spacing: 6) {
                             Button {
                                 selectedTrip = trip
