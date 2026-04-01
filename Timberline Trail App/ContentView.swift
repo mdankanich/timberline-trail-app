@@ -1988,7 +1988,6 @@ struct AuthView: View {
 
     private var authContent: some View {
         VStack(spacing: 16) {
-            Color.clear.frame(height: 24)
             authTitle
             appleSignInButton
             socialOptionButton(title: "Continue with Google", iconText: "G", iconColor: .orange) {
@@ -2002,8 +2001,8 @@ struct AuthView: View {
             emailAuthSection
             statusMessagesSection
             loadingRow
-            Color.clear.frame(height: 12)
         }
+        .padding(.top, 24)
         .padding(.horizontal, 20)
         .padding(.vertical, 16)
         .navigationBarHidden(true)
