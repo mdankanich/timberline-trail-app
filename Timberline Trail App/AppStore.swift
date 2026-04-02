@@ -222,10 +222,6 @@ final class AppStore: ObservableObject {
         }
     }
 
-    var needsOnboarding: Bool {
-        flowState == .onboardingRequired
-    }
-
     var activeTrip: Trip? {
         trips.first(where: { $0.id == activeTripID })
     }

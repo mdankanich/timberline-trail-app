@@ -12,6 +12,9 @@ import CryptoKit
 #if canImport(FirebaseAuth)
 import FirebaseAuth
 #endif
+#if canImport(FirebaseCore)
+import FirebaseCore
+#endif
 #if canImport(FirebaseFirestore)
 import FirebaseFirestore
 #endif
@@ -943,31 +946,47 @@ extension AppEnvironment {
         let localUser = LocalUserService(defaults: defaults)
         let localTrip = LocalTripService(defaults: defaults)
 
-#if canImport(FirebaseAuth)
-        let auth: AuthService = FirebaseAuthService()
+#if canImport(FirebaseAuth) && canImport(FirebaseFirestore) && canImport(FirebaseCore)
+        let firebaseReady = FirebaseApp.app() != nil
 #else
-        let auth: AuthService = LocalAuthService(defaults: defaults)
+        let firebaseReady = false
 #endif
 
+        let resolvedAuth: AuthService
+        let resolvedUser: UserService
+        let resolvedTrip: TripService
+        let resolvedContent: AppContentService
+        let resolvedTrailSync: TrailSyncService
+
 #if canImport(FirebaseAuth) && canImport(FirebaseFirestore)
-        let user: UserService = CompositeUserService(local: localUser, remote: FirebaseUserCloudService())
-        let trip: TripService = CompositeTripService(local: localTrip, remote: FirebaseTripCloudService())
-        let content: AppContentService = FirebaseAppContentService()
-        let trailSync: TrailSyncService = FirebaseTrailSyncService()
+        if firebaseReady {
+            resolvedAuth = FirebaseAuthService()
+            resolvedUser = CompositeUserService(local: localUser, remote: FirebaseUserCloudService())
+            resolvedTrip = CompositeTripService(local: localTrip, remote: FirebaseTripCloudService())
+            resolvedContent = FirebaseAppContentService()
+            resolvedTrailSync = FirebaseTrailSyncService()
+        } else {
+            resolvedAuth = LocalAuthService(defaults: defaults)
+            resolvedUser = CompositeUserService(local: localUser, remote: nil)
+            resolvedTrip = CompositeTripService(local: localTrip, remote: nil)
+            resolvedContent = LocalAppContentService()
+            resolvedTrailSync = LocalTrailSyncService()
+        }
 #else
-        let user: UserService = CompositeUserService(local: localUser, remote: nil)
-        let trip: TripService = CompositeTripService(local: localTrip, remote: nil)
-        let content: AppContentService = LocalAppContentService()
-        let trailSync: TrailSyncService = LocalTrailSyncService()
+        resolvedAuth = LocalAuthService(defaults: defaults)
+        resolvedUser = CompositeUserService(local: localUser, remote: nil)
+        resolvedTrip = CompositeTripService(local: localTrip, remote: nil)
+        resolvedContent = LocalAppContentService()
+        resolvedTrailSync = LocalTrailSyncService()
 #endif
 
         return AppEnvironment(
-            authService: auth,
+            authService: resolvedAuth,
             settingsService: localSettings,
-            userService: user,
-            tripService: trip,
-            appContentService: content,
-            trailSyncService: trailSync
+            userService: resolvedUser,
+            tripService: resolvedTrip,
+            appContentService: resolvedContent,
+            trailSyncService: resolvedTrailSync
         )
     }
 }

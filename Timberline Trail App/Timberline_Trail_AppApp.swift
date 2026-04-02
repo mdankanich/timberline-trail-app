@@ -20,9 +20,7 @@ struct Timberline_Trail_AppApp: App {
         configureAppearance()
 #endif
 #if canImport(FirebaseCore)
-        if FirebaseApp.app() == nil {
-            FirebaseApp.configure()
-        }
+        configureFirebaseIfPossible()
 #endif
     }
 
@@ -46,6 +44,26 @@ struct Timberline_Trail_AppApp: App {
         tabAppearance.configureWithDefaultBackground()
         UITabBar.appearance().standardAppearance = tabAppearance
         UITabBar.appearance().scrollEdgeAppearance = tabAppearance
+    }
+#endif
+
+#if canImport(FirebaseCore)
+    private func configureFirebaseIfPossible() {
+        guard FirebaseApp.app() == nil else { return }
+        guard let bundleID = Bundle.main.bundleIdentifier else { return }
+        guard let path = Bundle.main.path(forResource: "GoogleService-Info", ofType: "plist") else {
+            print("Firebase disabled: GoogleService-Info.plist not found in app bundle.")
+            return
+        }
+        guard let options = FirebaseOptions(contentsOfFile: path) else {
+            print("Firebase disabled: unable to load GoogleService-Info.plist.")
+            return
+        }
+        if options.bundleID != bundleID {
+            print("Firebase disabled: plist bundle ID \(options.bundleID) does not match app bundle ID \(bundleID).")
+            return
+        }
+        FirebaseApp.configure(options: options)
     }
 #endif
 }
