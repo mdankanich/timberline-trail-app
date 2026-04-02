@@ -59,8 +59,8 @@ struct Timberline_Trail_AppApp: App {
             print("Firebase disabled: unable to load GoogleService-Info.plist.")
             return
         }
-        if let configuredBundleID = options.bundleID, configuredBundleID != bundleID {
-            print("Firebase disabled: plist bundle ID \(configuredBundleID) does not match app bundle ID \(bundleID).")
+        if options.bundleID != bundleID {
+            print("Firebase disabled: plist bundle ID \(options.bundleID) does not match app bundle ID \(bundleID).")
             return
         }
         FirebaseApp.configure(options: options)
