@@ -2370,33 +2370,19 @@ private struct MapHomeView: View {
                 )
                 .frame(height: 300)
 
-                List {
-                    Section {
-                        routeSummarySheet
-                    } header: {
-                        Text("Route")
+                ScrollView {
+                    VStack(spacing: 12) {
+                        cardSection(title: "Route") { routeSummarySheet }
+                        cardSection(title: "Trail") { trailRows }
+                        cardSection(title: "Location") { locationRows }
+                        if !locationTracker.sessions.isEmpty {
+                            cardSection(title: "Recent Tracks") { recentTracksRows }
+                        }
+                        cardSection(title: "Waypoints") { waypointsRows }
                     }
-
-                    Section {
-                        trailRows
-                    } header: {
-                        Text("Trail")
-                    }
-
-                    Section {
-                        locationRows
-                    } header: {
-                        Text("Location")
-                    }
-
-                    recentTracksSection
-                    Section {
-                        waypointsRows
-                    } header: {
-                        Text("Waypoints")
-                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
                 }
-                .listStyle(.insetGrouped)
             }
             .navigationTitle("Trail")
             .navigationBarTitleDisplayMode(.large)
@@ -2451,6 +2437,21 @@ private struct MapHomeView: View {
             }
         }
         .navigationViewStyle(.stack)
+    }
+
+    private func cardSection<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .textCase(.uppercase)
+            VStack(alignment: .leading, spacing: 8) {
+                content()
+            }
+            .padding(12)
+            .background(Color(UIColor.secondarySystemGroupedBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
     }
 
     @ViewBuilder
@@ -2725,26 +2726,21 @@ private struct MapHomeView: View {
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
-    @ViewBuilder
-    private var recentTracksSection: some View {
-        if !locationTracker.sessions.isEmpty {
-            Section {
-                ForEach(Array(locationTracker.sessions.prefix(3).enumerated()), id: \.offset) { _, session in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(session.startedAt.formatted(date: .abbreviated, time: .shortened))
-                            .font(.subheadline.bold())
-                        Text(
-                            "\(session.points.count) pts • " +
-                            "\(String(format: "%.2f", locationTracker.distanceMiles(for: session))) mi • " +
-                            formatDuration(locationTracker.duration(for: session))
-                        )
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
-                    }
-                    .padding(.vertical, 2)
+    private var recentTracksRows: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(locationTracker.sessions.prefix(3).enumerated()), id: \.offset) { _, session in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(session.startedAt.formatted(date: .abbreviated, time: .shortened))
+                        .font(.subheadline.bold())
+                    Text(
+                        "\(session.points.count) pts • " +
+                        "\(String(format: "%.2f", locationTracker.distanceMiles(for: session))) mi • " +
+                        formatDuration(locationTracker.duration(for: session))
+                    )
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
                 }
-            } header: {
-                Text("Recent Tracks")
+                .padding(.vertical, 2)
             }
         }
     }
