@@ -2320,8 +2320,6 @@ private struct MapHomeView: View {
     }
 
     private struct TrailPositionSnapshot {
-        let latitude: Double
-        let longitude: Double
         let traveledMiles: Double
         let offTrailMeters: Double
     }
@@ -2895,8 +2893,6 @@ private struct MapHomeView: View {
         guard let progress = navigationProgress else { return nil }
         let offTrail = distanceToTrailMeters(from: location.coordinate)
         return TrailPositionSnapshot(
-            latitude: location.coordinate.latitude,
-            longitude: location.coordinate.longitude,
             traveledMiles: progress.traveledMiles,
             offTrailMeters: offTrail
         )

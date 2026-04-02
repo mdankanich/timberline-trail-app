@@ -469,6 +469,8 @@
 					INFOPLIST_KEY_NSHealthShareUsageDescription = "Health data is used to calculate your Timberline training readiness and weekly progress.";
 					INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Health data is updated to save your Timberline training progress and readiness metrics.";
 					INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Location is used to track your position on the Timberline Trail map.";
+					INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Photo library access is used to save or update your Timberline profile photo.";
+					INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Photo library access is used to choose your Timberline profile photo.";
 					INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 					INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationLandscapeRight UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationPortrait";
@@ -506,6 +508,8 @@
 					INFOPLIST_KEY_NSHealthShareUsageDescription = "Health data is used to calculate your Timberline training readiness and weekly progress.";
 					INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Health data is updated to save your Timberline training progress and readiness metrics.";
 					INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Location is used to track your position on the Timberline Trail map.";
+					INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Photo library access is used to save or update your Timberline profile photo.";
+					INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Photo library access is used to choose your Timberline profile photo.";
 					INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 					INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationLandscapeRight UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationPortrait";
